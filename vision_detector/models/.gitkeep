@@ -1,0 +1,7 @@
+# Place your YOLO model files here.
+# Supported formats: .pt (PyTorch), .onnx (ONNX), .engine (TensorRT)
+#
+# Example:
+#   cleaning_v1.0.0_s_best.pt
+#   cleaning_v1.0.0_s_best.onnx
+#   cleaning_v1.0.0_s_config.yaml

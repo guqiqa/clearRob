@@ -1,0 +1,23 @@
+# vision_detector default parameter configuration (M1)
+#
+# Override via:
+#   ros2 run vision_detector vision_detector_node --ros-args --params-file <this_file>
+#
+vision_detector:
+  ros__parameters:
+
+    # ---- Model ----
+    model_path: ""                            # Path to YOLO .pt / .onnx / .engine file
+    model_version: "yolov8"                   # yolov8 | yolov9 | yolov10
+    conf_threshold: 0.45                      # Confidence threshold (0.0–1.0)
+    nms_iou_threshold: 0.45                   # NMS IoU threshold
+    input_width: 640                          # Model input width (pixels)
+    input_height: 640                         # Model input height (pixels)
+
+    # ---- Inference ----
+    device: "cuda:0"                          # cuda:0 | cpu | tensorrt
+    half_precision: true                      # FP16 inference (ignored on CPU)
+
+    # ---- Performance ----
+    target_fps: 30.0                          # Target frames per second
+    warn_latency_ms: 50.0                     # Latency warning threshold (ms)
