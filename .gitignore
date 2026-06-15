@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
+*.eggs/
 
 # Model weights (large binary files)
 *.pt
@@ -15,8 +17,14 @@ runs/
 date/
 模型训练与验证/数据集/
 
+# ROS2 build artifacts
+build/
+install/
+log/
+
 # IDE
 .vscode/
+.idea/
 
 # OS
 .DS_Store
