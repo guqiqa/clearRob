@@ -1,0 +1,9 @@
+{
+  "_description": "基线模型指标 — 由 regression_test.py 自动生成和维护",
+  "_updated": null,
+  "map50": 0.0,
+  "map50_95": 0.0,
+  "precision": 0.0,
+  "recall": 0.0,
+  "f1": 0.0
+}

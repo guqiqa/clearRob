@@ -1,0 +1,28 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Model weights (large binary files)
+*.pt
+*.pth
+*.onnx
+
+# Training runs & outputs
+runs/
+
+# Large datasets
+date/
+模型训练与验证/数据集/
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python virtual environment
+venv/
+.venv/
+env/

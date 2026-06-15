@@ -1,0 +1,50 @@
+# 数据源注册 — 每个数据集的位置、格式与映射
+datasets:
+  - name: taco
+    path: "../数据集/raw/taco"
+    format: "coco_taco"
+    mapping: "taco"
+    annotation_file: "annotations.json"
+
+  - name: garbage_classify
+    path: "../数据集/raw/garbage_classify"
+    format: "classify_csv"
+    mapping: "garbage_classify"
+
+  - name: street_obstacle
+    path: "../数据集"
+    format: "yolo_remap"
+    mapping: "street_obstacle"
+
+  - name: trashnet
+    path: "../数据集/raw/trashnet"
+    format: "folder_class"
+    mapping: "trashnet"
+
+  - name: leaf_classify
+    path: "../数据集/raw/leaf_classify"
+    format: "csv_classify"
+    mapping: "leaf_classify"
+
+  - name: datas
+    path: "../数据集/raw/datas"
+    format: "coco_flat"
+    mapping: "datas"
+    annotation_file: "train.json"
+    per_class_cap:
+      pedestrian_pet: 3          # person 每图最多 3 框 (52k→12.5k)
+
+  - name: puddle
+    path: "../数据集/raw/puddle"
+    format: "voc_xml"
+    mapping: "puddle"
+
+  - name: puddle_large
+    path: "../数据集/raw/puddle_large"
+    format: "yolo_remap"          # 已有YOLO txt, 只需 class_id 0→7
+    mapping: "puddle_large"
+
+  - name: self_collected
+    path: "../数据集/raw/self_collected"
+    format: "yolo_txt"
+    mapping: null

@@ -1,0 +1,187 @@
+# ============================================================
+# 标签映射配置 — TACO 60 类 → 项目 8 类
+# 不在映射表中的原始标签将被丢弃
+# ============================================================
+
+target_classes:
+  0: recyclable       # 可回收垃圾
+  1: kitchen_waste    # 厨余垃圾
+  2: hazardous        # 有害垃圾
+  3: other_waste      # 其他垃圾
+  4: green_waste      # 绿化垃圾 (TACO中无)
+  5: large_obstacle   # 大件障碍物 (TACO中无)
+  6: pedestrian_pet   # 行人/宠物 (TACO中无)
+  7: stain            # 污渍/水渍 (TACO中无)
+
+mappings:
+  taco:
+    # ── 可回收垃圾 (金属/塑料/玻璃/纸类) ──
+    "Aluminium foil": recyclable
+    "Aluminium blister pack": recyclable
+    "Carded blister pack": recyclable
+    "Clear plastic bottle": recyclable
+    "Other plastic bottle": recyclable
+    "Glass bottle": recyclable
+    "Plastic bottle cap": recyclable
+    "Metal bottle cap": recyclable
+    "Food Can": recyclable
+    Aerosol: recyclable
+    "Drink can": recyclable
+    "Other carton": recyclable
+    "Egg carton": recyclable
+    "Drink carton": recyclable
+    "Corrugated carton": recyclable
+    "Meal carton": recyclable
+    "Pizza box": recyclable
+    "Paper cup": recyclable
+    "Glass cup": recyclable
+    "Glass jar": recyclable
+    "Plastic lid": recyclable
+    "Metal lid": recyclable
+    "Magazine paper": recyclable
+    "Normal paper": recyclable
+    "Paper bag": recyclable
+    "Plastified paper bag": recyclable
+    "Polypropylene bag": recyclable
+    "Tupperware": recyclable
+    "Disposable food container": recyclable
+    "Foam food container": recyclable
+    "Other plastic container": recyclable
+    "Wrapping paper": recyclable
+    "Scrap metal": recyclable
+    "Broken glass": recyclable
+    "Spread tub": recyclable
+
+    # ── 厨余垃圾 ──
+    "Food waste": kitchen_waste
+
+    # ── 有害垃圾 ──
+    Battery: hazardous
+
+    # ── 其他垃圾 ──
+    Tissues: other_waste
+    "Plastic film": other_waste
+    "Garbage bag": other_waste
+    "Other plastic wrapper": other_waste
+    "Single-use carrier bag": other_waste
+    "Crisp packet": other_waste
+    "Plastic glooves": other_waste
+    "Plastic utensils": other_waste
+    "Pop tab": other_waste
+    "Squeezable tube": other_waste
+    "Plastic straw": other_waste
+    "Paper straw": other_waste
+    "Styrofoam piece": other_waste
+    "Unlabeled litter": other_waste
+    Cigarette: other_waste
+    "Foam cup": other_waste
+    "Disposable plastic cup": other_waste
+    "Other plastic cup": other_waste
+    "Other plastic": other_waste
+    "Toilet tube": other_waste
+    "Rope & strings": other_waste
+    "Six pack rings": other_waste
+    Shoe: other_waste
+    "Squeezable tube": other_waste
+
+    # ── 以下 TACO 类别丢弃 (与环卫场景无关/标注极少) ──
+    # Nothing explicitly discarded — all 60 classes mapped above
+
+  # 旧街道障碍物数据集 (22类) → 项目目标 8 类
+  # 11411 张图片, 3675 个检测框
+  street_obstacle:
+    0: discard           # chair — 室内家具, 丢弃
+    1: discard           # fence — 固定设施, 丢弃
+    2: large_obstacle    # garbage bin — 垃圾桶是路边常见障碍物
+    3: discard           # pole — 电线杆, 固定设施, 丢弃
+    4: large_obstacle    # obstacle — 通用障碍物, 语义一致
+    5: large_obstacle    # tree — 路边树木, 常见障碍物
+    6: large_obstacle    # plant pot — 花盆, 路边常见障碍物
+    7: discard           # stair — 台阶, 丢弃
+    8: discard           # bad road — 路面状况, 丢弃
+    9: pedestrian_pet    # street vendor — 摊贩=人
+    10: discard          # drain — 排水沟, 丢弃
+    11: discard          # pothole — 路面坑洞, 丢弃
+    12: discard          # gate barrier — 闸门, 丢弃
+    13: stain            # puddle — 积水=污渍
+    14: discard          # motorcycle — 机动车, 丢弃
+    15: discard          # car — 机动车, 丢弃
+    16: discard          # left turn — 交通标志, 丢弃
+    17: pedestrian_pet   # pedestrian — 行人
+    18: large_obstacle   # roadblock — 路障=大件障碍物
+    19: discard          # door — 门, 丢弃
+    20: discard          # right turn — 交通标志, 丢弃
+    21: discard          # zebra cross — 斑马线, 丢弃
+
+  # garbage_classify: integer class_id → target class
+  # 40 细粒度中国垃圾分类 → 项目 4 大目标类
+  garbage_classify:
+    0: other_waste       # 其他垃圾/一次性快餐盒
+    1: other_waste       # 其他垃圾/污损塑料
+    2: other_waste       # 其他垃圾/烟蒂
+    3: other_waste       # 其他垃圾/牙签
+    4: other_waste       # 其他垃圾/破碎花盆及碟碗
+    5: other_waste       # 其他垃圾/竹筷
+    6: kitchen_waste     # 厨余垃圾/剩饭剩菜
+    7: kitchen_waste     # 厨余垃圾/大骨头
+    8: kitchen_waste     # 厨余垃圾/水果果皮
+    9: kitchen_waste     # 厨余垃圾/水果果肉
+    10: kitchen_waste    # 厨余垃圾/茶叶渣
+    11: kitchen_waste    # 厨余垃圾/菜叶菜根
+    12: kitchen_waste    # 厨余垃圾/蛋壳
+    13: kitchen_waste    # 厨余垃圾/鱼骨
+    14: recyclable       # 可回收物/充电宝
+    15: recyclable       # 可回收物/包
+    16: recyclable       # 可回收物/化妆品瓶
+    17: recyclable       # 可回收物/塑料玩具
+    18: recyclable       # 可回收物/塑料碗盆
+    19: recyclable       # 可回收物/塑料衣架
+    20: recyclable       # 可回收物/快递纸袋
+    21: recyclable       # 可回收物/插头电线
+    22: recyclable       # 可回收物/旧衣服
+    23: recyclable       # 可回收物/易拉罐
+    24: recyclable       # 可回收物/枕头
+    25: recyclable       # 可回收物/毛绒玩具
+    26: recyclable       # 可回收物/洗发水瓶
+    27: recyclable       # 可回收物/玻璃杯
+    28: recyclable       # 可回收物/皮鞋
+    29: recyclable       # 可回收物/砧板
+    30: recyclable       # 可回收物/纸板箱
+    31: recyclable       # 可回收物/调料瓶
+    32: recyclable       # 可回收物/酒瓶
+    33: recyclable       # 可回收物/金属食品罐
+    34: recyclable       # 可回收物/锅
+    35: recyclable       # 可回收物/食用油桶
+    36: recyclable       # 可回收物/饮料瓶
+    37: hazardous        # 有害垃圾/干电池
+    38: hazardous        # 有害垃圾/软膏
+    39: hazardous        # 有害垃圾/过期药物
+
+  # TrashNet: 文件夹分类 6 类 → recyclable / other_waste
+  trashnet:
+    cardboard: recyclable       # 纸板箱
+    glass: recyclable           # 玻璃
+    metal: recyclable           # 金属
+    paper: recyclable           # 纸类
+    plastic: recyclable         # 塑料
+    trash: other_waste          # 不可分辨垃圾
+
+  # classify-leaves: 176 树叶品种 → green_waste（绿化垃圾）
+  # 单叶实验室数据，非街景落叶，但填充 green_waste 缺口
+  leaf_classify:
+    "*": green_waste           # 全部 176 种 → green_waste
+
+  # datas: COCO 检测 4 类 → pedestrian_pet / large_obstacle
+  datas:
+    person: pedestrian_pet     # 行人 → 行人/宠物 (52,153 框!)
+    trafficcone: large_obstacle # 锥桶 → 大件障碍物
+    car: discard               # 机动车, 丢弃
+    pothole: discard           # 路面坑洞, 丢弃
+
+  # 积水检测 VOC 数据集 → stain
+  puddle:
+    water: stain               # 路面积水 → 污渍/水渍
+
+  # 大积水检测数据集 (3950张, YOLO格式) → stain
+  puddle_large:
+    0: stain                   # puddle class 0 → stain class 7

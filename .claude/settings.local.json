@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3)",
+      "Bash(powershell.exe -Command 'Get-ChildItem \"HKCU:\\\\Software\\\\Python\\\\PythonCore\" -Recurse 2>$null | Where-Object { $_.PSChildName -like \"*Continuum*\" -or $_.PSChildName -like \"*Anaconda*\" } | ForEach-Object { $_.PSPath }')",
+      "Bash(powershell.exe -Command 'Get-ChildItem \"HKCU:\\\\Software\\\\Python\\\\ContinuumAnalytics\" -ErrorAction SilentlyContinue | ForEach-Object { $_.PSPath }')"
+    ]
+  }
+}

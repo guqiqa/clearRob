@@ -1,0 +1,20 @@
+# 训练平台依赖
+# 安装: pip install -r requirements.txt
+# 或使用 conda: conda env create -f environment.yml
+
+torch>=2.1.0
+torchvision>=0.16.0
+ultralytics>=8.1.0
+onnx>=1.15.0
+onnxruntime-gpu>=1.16.0
+onnx-simplifier>=0.4.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+pyyaml>=6.0
+tensorboard>=2.14.0
+matplotlib>=3.7.0
+seaborn>=0.13.0
+pandas>=2.0.0
+tqdm>=4.65.0
+pillow>=10.0.0
+thop>=0.1.0

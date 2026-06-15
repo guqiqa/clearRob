@@ -1,0 +1,32 @@
+# ============================================================
+# 验证配置 — 评估参数、基线、部署门禁
+# ============================================================
+
+eval:
+  conf_threshold: 0.001          # mAP 评估用低阈值
+  iou_threshold: 0.5            # mAP@0.5
+  max_det: 300
+  save_fp_samples: true
+  save_fn_samples: true
+  fp_fn_topk: 50
+
+benchmark:
+  warmup_iterations: 50
+  benchmark_iterations: 500
+  batch_size: 1
+  device: 0                     # GPU 编号, "cpu" 为 CPU
+
+regression:
+  baseline: "../baseline/baseline.json"
+  # 告警阈值
+  map50_threshold_pct: 3.0      # mAP@0.5 下降 >3% 告警
+  recall_threshold_pct: 5.0     # Recall 下降 >5% 告警
+  fps_threshold_pct: 20.0       # FPS 下降 >20% 告警
+  per_class_ap_threshold_pct: 10.0  # 单类 AP 下降 >10% 告警
+
+deploy_gate:
+  map50_min: 0.85
+  recall_min: 0.90
+  fps_min_gpu: 30.0
+  fps_min_jetson: 15.0
+  per_class_ap_min: 0.60

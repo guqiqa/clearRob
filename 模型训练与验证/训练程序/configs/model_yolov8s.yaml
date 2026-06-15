@@ -1,0 +1,69 @@
+# ============================================================
+# YOLOv8s 训练超参 — 所有参数均可通过命令行覆盖
+# 用法: python scripts/train.py --model configs/model_yolov8s.yaml
+# ============================================================
+
+# ---- 模型配置 ----
+model:
+  scale: s                     # n / s / m / l / x
+  pretrained: yolov8s.pt       # 预训练权重（自动下载）
+
+# ---- 训练超参 ----
+train:
+  epochs: 300
+  batch: 16
+  imgsz: 640
+  device: 0                    # GPU 编号, "cpu" 为 CPU, "0,1" 为多卡
+  workers: 0                    # Windows 推荐 0，Linux 可设 8
+  resume: false                # 从 last.pt 断点续训
+  exist_ok: true               # 覆盖同名输出目录
+
+# ---- 优化器 ----
+optimizer:
+  name: AdamW                  # SGD / Adam / AdamW / RMSProp
+  lr0: 0.001                   # 初始学习率
+  lrf: 0.01                    # 最终学习率因子 (final_lr = lr0 * lrf)
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3
+  warmup_momentum: 0.8
+  warmup_bias_lr: 0.1
+
+# ---- 损失权重 ----
+loss:
+  box: 7.5                     # 边界框回归损失系数
+  cls: 0.5                     # 分类损失系数
+  dfl: 1.5                     # DFL 损失系数
+
+# ---- 数据增强 ----
+augment:
+  mosaic: 1.0
+  mixup: 0.1
+  copy_paste: 0.1
+  hsv_h: 0.015                 # 色调扰动
+  hsv_s: 0.7                   # 饱和度扰动
+  hsv_v: 0.4                   # 亮度扰动
+  degrees: 0.0                 # 旋转角度（0 = 不旋转）
+  translate: 0.1               # 平移
+  scale: 0.5                   # 缩放增益
+  fliplr: 0.5                  # 水平翻转概率
+  flipud: 0.0                  # 垂直翻转概率（0 = 不翻转）
+  erasing: 0.4                 # 随机擦除概率
+
+# ---- 训练策略 ----
+strategy:
+  close_mosaic: 10             # 最后 N epoch 关闭 mosaic
+  label_smoothing: 0.0
+  nbs: 64                      # 名义 batch size（梯度累积参照）
+  patience: 50                 # 早停 patience（epoch）
+  cos_lr: true                 # 余弦学习率调度
+  amp: true                    # 自动混合精度
+  ema: true                    # 指数滑动平均
+  dropout: 0.0                 # 分类头 dropout
+  save_period: 10              # 每隔 N epoch 保存一次 checkpoint
+  val_period: 1                # 每隔 N epoch 验证一次
+
+# ---- 输出 ----
+output:
+  project: runs                # 输出根目录
+  name: train                  # 自动追加时间戳变为 train_{timestamp}
