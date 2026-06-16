@@ -1,0 +1,5 @@
+# Runtime priority rule adjustment (control_gateway only)
+string   rule                # "RC_ONLY" / "RC_APP" / "ALL"
+---
+bool     success
+string   message

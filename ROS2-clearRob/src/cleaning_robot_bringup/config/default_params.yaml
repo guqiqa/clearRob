@@ -1,0 +1,208 @@
+# Default parameters for all cleaning robot nodes
+# Load with: ros2 launch cleaning_robot_bringup cleaning_robot.launch.py
+
+# ---- System ----
+system:
+  ros__parameters:
+    robot_id: "robot_001"
+    namespace: ""  # Empty = no namespace, use / for multi-robot: robot_001/
+
+# ---- control_gateway ----
+control_gateway:
+  ros__parameters:
+    default_priority_rule: "RC_APP"
+    dedup_interval_ms: 200
+    arbitration_window_ms: 50
+    voice_confidence_threshold: 0.6
+    max_linear_velocity: 1.5
+    max_angular_velocity: 2.0
+    max_velocity_publish_rate: 50.0
+    estop_debounce_ms: 100
+
+# ---- master_controller ----
+master_controller:
+  ros__parameters:
+    max_linear_velocity: 1.5
+    max_angular_velocity: 2.0
+    max_linear_accel: 1.0
+    max_angular_accel: 2.0
+    arbitration_rate: 50.0
+    maneuver_timeout_s: 0.2
+    cleanliness_pass_threshold: 0.7
+    max_resweep_count: 3
+    battery_warn_threshold: 0.3
+    battery_force_return_threshold: 0.15
+    battery_emergency_threshold: 0.05
+    battery_full_threshold: 0.95
+    localization_confidence_min: 0.3
+    localization_degrade_timeout_s: 5.0
+    heartbeat_timeout_s: 5.0
+    recovery_hold_s: 10.0
+    critical_alert_auto_resume_s: 5.0
+    critical_alert_max_duration_s: 30.0
+
+# ---- path_planner ----
+path_planner:
+  ros__parameters:
+    cleaning_width: 0.8
+    default_overlap_ratio: 0.1
+    waypoint_spacing: 0.1
+    min_turn_radius: 0.5
+    lookahead_min: 0.5
+    lookahead_max: 2.0
+    lookahead_gain: 0.8
+    k_cross_track: 0.8
+    k_heading: 1.0
+    target_velocity_cruise: 0.8
+    target_velocity_clean: 0.3
+    controller_rate: 20.0
+    position_tolerance: 0.1
+    heading_tolerance_deg: 5.0
+    stop_velocity: 0.05
+    teb_min_obstacle_dist: 0.3
+    planning_timeout_s: 10.0
+    max_replanning_attempts: 5
+
+# ---- motion_controller ----
+motion_controller:
+  ros__parameters:
+    wheel_base: 0.6
+    wheel_radius: 0.1
+    gear_ratio: 20.0
+    pulses_per_rev: 2048
+    max_linear_velocity: 1.5
+    max_angular_velocity: 2.0
+    max_linear_accel: 1.0
+    max_angular_accel: 2.0
+    pid_kp: 0.5
+    pid_ki: 0.1
+    pid_kd: 0.05
+    pid_integral_max: 0.3
+    dead_zone_ms: 0.01
+    control_rate: 200.0
+    odom_publish_rate: 100.0
+    imu_fusion_alpha: 0.95
+    current_overload_ratio: 1.5
+    current_overload_timeout_s: 1.0
+    temperature_warn_c: 80.0
+    temperature_cutoff_c: 100.0
+    master_cmd_timeout_ms: 500
+    slope_assist_min_deg: 5.0
+    slope_warn_deg: 15.0
+    slope_max_deg: 20.0
+
+# ---- localization_engine ----
+localization_engine:
+  ros__parameters:
+    map_resolution: 0.05
+    map_init_size_x: 200.0
+    map_init_size_y: 200.0
+    map_publish_rate_max: 2.0
+    slam_algorithm: "simulated_ekf"
+    submap_size: 30.0
+    max_submaps: 10
+    loop_closure_enabled: true
+    loop_closure_min_dist: 3.0
+    loop_closure_min_interval_s: 30.0
+    loop_closure_match_threshold: 0.75
+    ekf_process_noise_xy: 0.05
+    ekf_process_noise_yaw: 0.02
+    ekf_odom_noise_xy: 0.02
+    ekf_odom_noise_yaw: 0.01
+    confidence_scan_match_weight: 0.5
+    confidence_covariance_weight: 0.3
+    confidence_imu_weight: 0.2
+    max_covariance_trace: 0.5
+    localization_rate: 50.0
+    scan_match_rate: 20.0
+
+# ---- vision_detector ----
+vision_detector:
+  ros__parameters:
+    model_path: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_best.engine"
+    model_config: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_config.yaml"
+    model_version: "yolov8"
+    conf_threshold: 0.45
+    nms_iou_threshold: 0.45
+    input_width: 640
+    input_height: 640
+    device: "cpu"
+    half_precision: false
+    max_batch_size: 1
+    enable_tracking: false
+    publish_annotated_image: false
+    target_fps: 30.0
+    warn_latency_ms: 50.0
+    degrade_fps_ratio: 0.5
+    cleanliness_interval_s: 1.0
+    cleanliness_saturation_ratio: 0.3
+    simulate_camera: true
+    camera_width: 1280
+    camera_height: 720
+
+# ---- cleaning_actuator ----
+cleaning_actuator:
+  ros__parameters:
+    cleaning_width: 0.8
+    max_brush_life_hours: 500.0
+    max_dust_capacity_l: 50.0
+    dust_fill_rate_per_minute: 0.033
+    coverage_efficiency: 0.85
+
+# ---- lidar_perception ----
+lidar_perception:
+  ros__parameters:
+    scan_freq: 10.0
+    horizontal_fov_deg: 360.0
+    vertical_fov_deg: 30.0
+    voxel_leaf_size: 0.05
+    sor_mean_k: 20
+    sor_std_dev_mul: 2.0
+    ground_ransac_threshold: 0.05
+    height_filter_min: 0.1
+    height_filter_max: 3.0
+    radius_filter_min: 0.3
+    radius_filter_max: 30.0
+    cluster_tolerance: 0.1
+    cluster_min_points: 10
+    cluster_max_points: 5000
+    assoc_max_distance: 0.5
+    estop_min_distance_cruise: 0.3
+    estop_min_distance_clean: 0.3
+    estop_min_distance_return: 0.5
+    estop_large_obstacle_threshold: 1.0
+    estop_large_obstacle_angle: 30.0
+    estop_trigger_frames: 2
+    estop_release_frames: 5
+    estop_pointcloud_ratio_min: 0.3
+    simulate_scans: true
+
+# ---- fusion_engine ----
+fusion_engine:
+  ros__parameters:
+    tolerance_window_ms: 50
+    camera_fx: 600.0
+    camera_fy: 600.0
+    camera_cx: 640.0
+    camera_cy: 360.0
+    camera_width: 1280
+    camera_height: 720
+    camera_height_m: 0.5
+    T_camera_lidar_x: 0.1
+    T_camera_lidar_y: 0.0
+    T_camera_lidar_z: 0.3
+    depth_range_min: 0.3
+    depth_range_max: 30.0
+    min_points_in_bbox: 5
+    visual_lidar_assoc_max_dist: 1.0
+    visual_lidar_assoc_max_angle_deg: 10.0
+    large_trash_size_threshold: 0.3
+    water_area_detour_threshold: 0.5
+    detour_safety_margin: 0.5
+    pedestrian_default_wait_s: 5.0
+    pedestrian_rush_wait_s: 10.0
+    pedestrian_rush_velocity: 1.0
+    critical_distance: 3.0
+    vision_timeout_s: 2.0
+    vision_recovery_s: 3.0
+    max_fusion_targets_per_frame: 10

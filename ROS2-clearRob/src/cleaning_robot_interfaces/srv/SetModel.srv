@@ -1,0 +1,5 @@
+# Hot-switch vision model
+string   model_path          # Request: absolute model file path (.pt/.onnx/.engine)
+---
+bool     success             # Response: load success
+string   message             # Response: model summary or error reason

@@ -1,0 +1,10 @@
+# Cleaning Robot ROS2 Workspace
+
+# Suppress colcon build warnings for Python packages
+build:
+  symlink-install: true
+
+# Uncomment to enable specific CMake args
+# cmake-args:
+#   - -DCMAKE_BUILD_TYPE=Release
+#   - -DCMAKE_CXX_FLAGS="-Wall -Wextra"

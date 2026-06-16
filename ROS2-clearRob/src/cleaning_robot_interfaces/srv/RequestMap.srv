@@ -1,0 +1,5 @@
+# Request current occupancy grid map
+geometry_msgs/Polygon  roi            # Empty = return full map
+---
+nav_msgs/OccupancyGrid  map
+bool                    success

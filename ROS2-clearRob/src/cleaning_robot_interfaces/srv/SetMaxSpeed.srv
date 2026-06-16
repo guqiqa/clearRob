@@ -1,0 +1,6 @@
+# Set chassis max speed
+float32  max_linear_velocity  # m/s (0.1~2.0)
+float32  max_angular_velocity # rad/s (0.1~3.0)
+---
+bool     success
+string   message
