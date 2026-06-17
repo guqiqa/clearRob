@@ -260,8 +260,13 @@ def _bresenham_line(x0: int, y0: int, x1: int, y1: int) -> List[Tuple[int, int]]
     err = dx - dy
     x, y = x0, y0
     while True:
-        x, y = x + sx if err > -dy else x, y + sy if err < dx else (x + sx, y + sy)
-        err += dy if err > -dy else -dx
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x += sx
+        if e2 < dx:
+            err += dx
+            y += sy
         if (x, y) == (x1, y1):
             break
         cells.append((x, y))
@@ -798,11 +803,12 @@ class LocalizationEngine(Node):
         now = self.get_clock().now()
         if _HAS_CUSTOM_IFACES:
             hb = Heartbeat()
+            hb.header.stamp = now.to_msg()
+            hb.header.frame_id = ''
             hb.node_name = 'localization_engine'
-            hb.timestamp = now.to_msg()
-            hb.healthy = self.localization_confidence > 0.3
+            hb.lifecycle_state = 3  # ACTIVE
             hb.error_code = (
-                0 if hb.healthy else 1
+                0 if self.localization_confidence > 0.3 else 2
             )
             self._pub_heartbeat.publish(hb)
         else:
@@ -814,12 +820,12 @@ class LocalizationEngine(Node):
         now = self.get_clock().now()
         if _HAS_CUSTOM_IFACES:
             status = VisionStatus()
-            status.header.stamp = now.to_msg()
-            status.header.frame_id = 'map'
-            status.is_active = True
-            status.confidence = float(self.localization_confidence)
-            status.processing_time_ms = 0.0
-            status.error_message = ''
+            status.active_model = 'simulated_ekf'
+            status.avg_inference_ms = 0.0
+            status.fps = 0.0
+            status.status = 0 if self.localization_confidence > 0.3 else 2
+            status.status_text = (
+                'normal' if self.localization_confidence > 0.3 else 'degraded')
             self._pub_status.publish(status)
         else:
             status = Float32()

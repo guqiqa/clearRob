@@ -137,7 +137,7 @@ class FusionEngineNode(Node):
         # Publishers
         # ------------------------------------------------------------------
         self._target_pub = self.create_publisher(
-            Fusion3DTarget, 'fusion/3d_target', reliable_qos,
+            Fusion3DTarget, 'fusion/target_3d', reliable_qos,
         )
         self._decision_pub = self.create_publisher(
             FusionDecision, 'fusion/obstacle/decision', reliable_qos,

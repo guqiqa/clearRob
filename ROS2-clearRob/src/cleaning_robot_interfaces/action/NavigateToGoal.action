@@ -1,13 +1,14 @@
 # Navigate to goal point (path_planner Action Server, called by master_controller)
-# --- Goal ---
 geometry_msgs/PoseStamped  target_pose
 float32                    target_tolerance    # m (default 0.1)
 float32                    timeout_s           # s (0=no timeout)
-# --- Result ---
+
+---
 bool                       success
 float32                    final_distance      # m
 float32                    path_length         # m
-# --- Feedback ---
+
+---
 float32                    progress            # 0.0~1.0
 float32                    distance_to_goal    # m
 float32                    estimated_remaining_s  # s

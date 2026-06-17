@@ -44,7 +44,43 @@ from cleaning_robot_interfaces.msg import (
 from cleaning_robot_interfaces.srv import SetMaxSpeed, GetStatus
 from cleaning_robot_interfaces.action import FollowPath
 
-import tf_transformations  # for quaternion_from_euler
+# Local quaternion helpers (replace tf_transformations dependency)
+
+def euler_from_quaternion(x: float, y: float, z: float, w: float):
+    """Return (roll, pitch, yaw) from quaternion (x, y, z, w)."""
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = math.atan2(siny_cosp, cosy_cosp)
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = math.atan2(sinr_cosp, cosr_cosp)
+    sinp = 2.0 * (w * y - z * x)
+    if abs(sinp) >= 1.0:
+        pitch = math.copysign(math.pi / 2.0, sinp)
+    else:
+        pitch = math.asin(sinp)
+    return roll, pitch, yaw
+
+
+def quat_to_list(q: Quaternion):
+    """Return [x, y, z, w] list from Quaternion msg (tf_transformations compat)."""
+    return [q.x, q.y, q.z, q.w]
+
+
+def quaternion_from_euler(roll: float, pitch: float, yaw: float) -> Quaternion:
+    """Return geometry_msgs/Quaternion from Euler angles (radians)."""
+    q = Quaternion()
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    q.w = cr * cp * cy + sr * sp * sy
+    q.x = sr * cp * cy - cr * sp * sy
+    q.y = cr * sp * cy + sr * cp * sy
+    q.z = cr * cp * sy - sr * sp * cy
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -433,13 +469,11 @@ class MotionController(Node):
         """Capture IMU data for slope assist and yaw fusion."""
         # Extract pitch from quaternion
         q = msg.orientation
-        _, pitch, _ = tf_transformations.euler_from_quaternion(
-            [q.x, q.y, q.z, q.w])
+        _, pitch, _ = euler_from_quaternion(q.x, q.y, q.z, q.w)
         self._imu_pitch = pitch  # rad
 
         # Extract yaw for odometry fusion
-        _, _, yaw = tf_transformations.euler_from_quaternion(
-            [q.x, q.y, q.z, q.w])
+        _, _, yaw = euler_from_quaternion(q.x, q.y, q.z, q.w)
         self._imu_yaw = yaw
 
     # ------------------------------------------------------------------
@@ -556,8 +590,8 @@ class MotionController(Node):
         msg.child_frame_id = 'base_link'
 
         msg.pose.pose.position = Point(x=x, y=y, z=0.0)
-        q = tf_transformations.quaternion_from_euler(0.0, 0.0, theta)
-        msg.pose.pose.orientation = Quaternion(x=q[0], y=q[1], z=q[2], w=q[3])
+        q = quaternion_from_euler(0.0, 0.0, theta)
+        msg.pose.pose.orientation = q
 
         msg.pose.covariance = [0.001, 0.0, 0.0, 0.0, 0.0, 0.0,
                                0.0, 0.001, 0.0, 0.0, 0.0, 0.0,

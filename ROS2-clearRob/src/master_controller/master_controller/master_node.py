@@ -48,8 +48,8 @@ from cleaning_robot_interfaces.msg import (
     MotionCommand,
     Alert,
     Heartbeat,
-    GetStatus,
 )
+from cleaning_robot_interfaces.srv import GetStatus
 from cleaning_robot_interfaces.action import (
     NavigateToGoal,
     FollowPath,
@@ -263,13 +263,12 @@ class MasterControllerNode(Node):
             self._cb_loc_confidence, qos_default, callback_group=self._main_cb_group)
 
         self._sub_fusion_target = self.create_subscription(
-            Fusion3DTarget, 'fusion/3d_target',
+            Fusion3DTarget, 'fusion/target_3d',
             self._cb_fusion_target, qos_reliable, callback_group=self._main_cb_group)
 
-        # Heartbeat subscription — use raw String type for wildcard simplicity.
-        # Each heartbeat message carries module_name as data.
+        # Heartbeat subscription for our own heartbeat (self-monitoring)
         self._sub_heartbeat = self.create_subscription(
-            String, 'system/heartbeat/master_controller',
+            Heartbeat, 'system/heartbeat/master_controller',
             self._cb_heartbeat, qos_default, callback_group=self._main_cb_group)
 
         # We also need a wildcard for other module heartbeats. In ROS2 we
@@ -351,8 +350,8 @@ class MasterControllerNode(Node):
                 self.get_clock().now().nanoseconds / 1e9)
         return cb
 
-    def _cb_heartbeat(self, msg: String):
-        """Handle our own heartbeat echo or general heartbeat string."""
+    def _cb_heartbeat(self, msg: Heartbeat):
+        """Handle our own heartbeat echo for self-monitoring."""
         pass  # Reserved for future heartbeat correlation
 
     # ------------------------------------------------------------------
@@ -393,7 +392,7 @@ class MasterControllerNode(Node):
         pass  # Stored for reference; planner state drives transitions
 
     def _cb_planner_state(self, msg: PlannerState):
-        self._planner_state_val = msg.state.upper()
+        self._planner_state_val = msg.state_text.upper()
         if self._state == SystemState.PLANNING and self._planner_state_val == 'READY':
             self._transition_to(SystemState.CRUISING)
         elif self._state == SystemState.RETURNING and self._planner_state_val == 'COMPLETED':
@@ -402,10 +401,10 @@ class MasterControllerNode(Node):
     def _cb_motion_fault(self, msg: FaultStatus):
         if msg.requires_reset:
             self._motion_fault_reset = True
-            self._publish_alert('MOTION_FAULT', f'{msg.fault_code}: {msg.description}')
+            self._publish_alert('MOTION_FAULT', f'{msg.fault_code}: {msg.fault_text}')
             self._transition_to(SystemState.ESTOP)
         else:
-            self.get_logger().warn(f'Motion non-critical fault: {msg.description}')
+            self.get_logger().warn(f'Motion non-critical fault: {msg.fault_text}')
 
     def _cb_odom(self, msg: Odometry):
         pass  # Battery estimation handled in monitor timer
@@ -434,8 +433,8 @@ class MasterControllerNode(Node):
             self._loc_low_start = None
 
     def _cb_fusion_target(self, msg: Fusion3DTarget):
-        self._fusion_alert_level = msg.alert_level.upper()
-        self._fusion_alert_type = msg.target_type.upper()
+        self._fusion_alert_level = 'CRITICAL' if msg.alert_level >= 2 else 'WARN' if msg.alert_level >= 1 else 'NONE'
+        self._fusion_alert_type = msg.target_class.upper()
         if self._fusion_alert_level == 'CRITICAL':
             if 'PEDESTRIAN' in self._fusion_alert_type:
                 self._critical_alert_start = self.get_clock().now().nanoseconds / 1e9
@@ -842,9 +841,11 @@ class MasterControllerNode(Node):
     # ------------------------------------------------------------------
     def _timer_heartbeat(self):
         hb = Heartbeat()
-        hb.module_name = 'master_controller'
-        hb.state = STATE_NAMES[self._state]
-        hb.timestamp = self.get_clock().now().to_msg()
+        hb.header.stamp = self.get_clock().now().to_msg()
+        hb.header.frame_id = ''
+        hb.node_name = 'master_controller'
+        hb.lifecycle_state = 3  # ACTIVE
+        hb.error_code = 0
         self._pub_hb.publish(hb)
 
         # Also update our own heartbeat
@@ -856,10 +857,8 @@ class MasterControllerNode(Node):
     # ------------------------------------------------------------------
     def _timer_status(self):
         ps = PlannerState()
-        ps.state = STATE_NAMES[self._state]
-        ps.battery = self._battery_pct
-        ps.dust_full = self._dust_full
-        ps.localization_confidence = self._localization_confidence
+        ps.state = int(self._state)
+        ps.state_text = STATE_NAMES[self._state]
         self._pub_status.publish(ps)
 
     # ------------------------------------------------------------------
@@ -926,9 +925,12 @@ class MasterControllerNode(Node):
 
     def _publish_alert(self, code: str, description: str):
         alert = Alert()
-        alert.code = code
-        alert.description = description
-        alert.timestamp = self.get_clock().now().to_msg()
+        alert.header.stamp = self.get_clock().now().to_msg()
+        alert.header.frame_id = ''
+        alert.source_node = 'master_controller'
+        alert.severity = 2  # ERROR
+        alert.alert_code = code
+        alert.alert_text = description
         self._pub_alert.publish(alert)
         self.get_logger().warn(f'ALERT [{code}]: {description}')
 

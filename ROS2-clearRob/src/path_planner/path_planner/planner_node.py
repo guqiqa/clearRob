@@ -276,7 +276,7 @@ class PathPlannerNode(Node):
         )
 
         # ----- Timers -----
-        self._timer_control = self.create_timer(1.0 / self._controller_rate, self._control_loop)
+        self._timer_control = self.create_timer(1.0 / self.controller_rate, self._control_loop)
         self._timer_state = self.create_timer(0.2, self._publish_state)
         self._timer_heartbeat = self.create_timer(1.0, self._publish_heartbeat)
 

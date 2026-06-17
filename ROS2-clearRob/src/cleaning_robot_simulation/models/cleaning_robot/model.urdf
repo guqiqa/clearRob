@@ -1,0 +1,103 @@
+<?xml version="1.0" ?>
+<robot name="cleaning_robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- =================================================================== -->
+  <!-- Base chassis                                                         -->
+  <!-- =================================================================== -->
+  <link name="base_link">
+    <inertial>
+      <mass value="15.0"/>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <inertia ixx="0.8" ixy="0.0" ixz="0.0" iyy="1.2" iyz="0.0" izz="1.0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <geometry><box size="0.6 0.5 0.3"/></geometry>
+      <material name="blue"><color rgba="0.1 0.1 0.8 1.0"/></material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.15" rpy="0 0 0"/>
+      <geometry><box size="0.6 0.5 0.3"/></geometry>
+    </collision>
+  </link>
+
+  <!-- =================================================================== -->
+  <!-- Wheels                                                               -->
+  <!-- =================================================================== -->
+  <link name="wheel_left">
+    <inertial>
+      <mass value="0.8"/>
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.004"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.1" length="0.06"/></geometry>
+      <material name="black"><color rgba="0.2 0.2 0.2 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.1" length="0.06"/></geometry>
+    </collision>
+  </link>
+
+  <link name="wheel_right">
+    <inertial>
+      <mass value="0.8"/>
+      <inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.004"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.1" length="0.06"/></geometry>
+      <material name="black_right"><color rgba="0.2 0.2 0.2 1.0"/></material>
+    </visual>
+    <collision>
+      <geometry><cylinder radius="0.1" length="0.06"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="wheel_left_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_left"/>
+    <origin xyz="0 0.28 0.1" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <joint name="wheel_right_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_right"/>
+    <origin xyz="0 -0.28 0.1" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- =================================================================== -->
+  <!-- Sensors                                                              -->
+  <!-- =================================================================== -->
+  <link name="lidar_link"/>
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="lidar_link"/>
+    <origin xyz="0.1 0 0.4" rpy="0 0 0"/>
+  </joint>
+
+  <link name="camera_link"/>
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.2 0 0.5" rpy="0 0.2 0"/>
+  </joint>
+
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0.1" rpy="0 0 0"/>
+  </joint>
+
+  <!-- =================================================================== -->
+  <!-- Footprint (ground projection)                                        -->
+  <!-- =================================================================== -->
+  <link name="base_footprint"/>
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="base_footprint"/>
+    <origin xyz="0 0 -0.15" rpy="0 0 0"/>
+  </joint>
+
+</robot>

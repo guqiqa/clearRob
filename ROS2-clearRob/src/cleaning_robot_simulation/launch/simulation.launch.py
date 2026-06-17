@@ -23,11 +23,16 @@ def generate_launch_description():
     pkg_sim = get_package_share_directory("cleaning_robot_simulation")
     pkg_bringup = get_package_share_directory("cleaning_robot_bringup")
 
+    # Read URDF file content at parse time
+    urdf_path = os.path.join(pkg_sim, "models", "cleaning_robot", "model.urdf")
+    with open(urdf_path, "r") as f:
+        robot_description_content = f.read()
+
     # World selection
     world_arg = DeclareLaunchArgument(
         "world",
-        default_value="outdoor_campus",
-        description="World to load: outdoor_campus / indoor_hall / test_room",
+        default_value="outdoor_campus.world",
+        description="World file: outdoor_campus.world / indoor_hall.world / test_room.world",
     )
 
     # Headless mode
@@ -47,7 +52,7 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            "world": PathJoinSubstitution([pkg_sim, "worlds", LaunchConfiguration("world")]) + ".world",
+            "world": PathJoinSubstitution([pkg_sim, "worlds", LaunchConfiguration("world")]),
             "headless": LaunchConfiguration("headless"),
         }.items(),
     )
@@ -72,9 +77,7 @@ def generate_launch_description():
         package="robot_state_publisher",
         executable="robot_state_publisher",
         parameters=[{
-            "robot_description": PathJoinSubstitution([
-                pkg_sim, "models", "cleaning_robot", "model.urdf"
-            ]),
+            "robot_description": robot_description_content,
             "use_sim_time": True,
         }],
     )

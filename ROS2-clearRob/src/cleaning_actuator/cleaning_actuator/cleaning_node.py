@@ -18,6 +18,7 @@ import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from lifecycle_msgs.msg import State as LifecycleStateMsg
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 
@@ -645,11 +646,11 @@ class CleaningActuatorNode(LifecycleNode):
         msg.node_name = self.get_name()
 
         state = self._state_machine.current_state
-        if state == LifecycleState.PRIMARY_STATE_ACTIVE:
+        if state[0] == LifecycleStateMsg.PRIMARY_STATE_ACTIVE:
             msg.lifecycle_state = int(LifecycleStateCode.ACTIVE)
-        elif state == LifecycleState.PRIMARY_STATE_INACTIVE:
+        elif state[0] == LifecycleStateMsg.PRIMARY_STATE_INACTIVE:
             msg.lifecycle_state = int(LifecycleStateCode.INACTIVE)
-        elif state == LifecycleState.PRIMARY_STATE_UNCONFIGURED:
+        elif state[0] == LifecycleStateMsg.PRIMARY_STATE_UNCONFIGURED:
             msg.lifecycle_state = int(LifecycleStateCode.UNCONFIGURED)
         else:
             msg.lifecycle_state = int(LifecycleStateCode.FINALIZED)
@@ -837,8 +838,10 @@ def main(args=None):
     try:
         # Manually drive lifecycle transitions for standalone usage.
         # In a composed system a lifecycle manager would handle this.
-        node.on_configure(LifecycleState.PRIMARY_STATE_UNCONFIGURED)
-        node.on_activate(LifecycleState.PRIMARY_STATE_INACTIVE)
+        node.on_configure(LifecycleStateMsg(
+            id=LifecycleStateMsg.PRIMARY_STATE_UNCONFIGURED, label='unconfigured'))
+        node.on_activate(LifecycleStateMsg(
+            id=LifecycleStateMsg.PRIMARY_STATE_INACTIVE, label='inactive'))
 
         executor = MultiThreadedExecutor()
         executor.add_node(node)

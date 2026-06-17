@@ -21,6 +21,8 @@ date/
 build/
 install/
 log/
+logs/
+.pids/
 
 # IDE
 .vscode/
