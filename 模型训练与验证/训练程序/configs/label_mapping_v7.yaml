@@ -1,0 +1,176 @@
+# ============================================================
+# 标签映射配置 V7 — 各数据源原始标签 → 细粒度标签
+# 不在映射表中的原始标签将被丢弃
+# ============================================================
+
+# 公共目标定义引用 fine_labels.yaml
+
+mappings:
+  # TACO: 60 COCO classes → 细粒度标签
+  taco:
+    # ── 可回收-塑料 ──
+    "Clear plastic bottle": rec_plastic
+    "Other plastic bottle": rec_plastic
+    "Plastic bottle cap": rec_plastic
+    "Plastic lid": rec_plastic
+    "Disposable food container": rec_plastic
+    "Foam food container": rec_plastic
+    "Other plastic container": rec_plastic
+    "Tupperware": rec_plastic
+    "Spread tub": rec_plastic
+    "Other plastic": rec_plastic
+    "Six pack rings": rec_plastic
+    "Polypropylene bag": rec_plastic
+    # ── 可回收-金属 ──
+    "Food Can": rec_metal
+    Aerosol: rec_metal
+    "Drink can": rec_metal
+    "Aluminium foil": rec_metal
+    "Metal bottle cap": rec_metal
+    "Metal lid": rec_metal
+    "Pop tab": rec_metal
+    "Scrap metal": rec_metal
+    "Aluminium blister pack": rec_metal
+    "Carded blister pack": rec_metal
+    # ── 可回收-玻璃 ──
+    "Glass bottle": rec_glass
+    "Broken glass": rec_glass
+    "Glass cup": rec_glass
+    "Glass jar": rec_glass
+    # ── 可回收-纸类 ──
+    "Other carton": rec_paper
+    "Egg carton": rec_paper
+    "Drink carton": rec_paper
+    "Corrugated carton": rec_paper
+    "Meal carton": rec_paper
+    "Pizza box": rec_paper
+    "Magazine paper": rec_paper
+    "Normal paper": rec_paper
+    "Paper bag": rec_paper
+    "Paper cup": rec_paper
+    "Plastified paper bag": rec_paper
+    "Wrapping paper": rec_paper
+    "Toilet tube": rec_paper
+    # ── 厨余 ──
+    "Food waste": kitchen_waste
+    # ── 有害 ──
+    Battery: hazardous
+    # ── 烟头（单独一类） ──
+    Cigarette: waste_cigarette
+    # ── 其他垃圾 ──
+    Tissues: waste_misc
+    "Plastic film": waste_misc
+    "Garbage bag": waste_misc
+    "Other plastic wrapper": waste_misc
+    "Single-use carrier bag": waste_misc
+    "Crisp packet": waste_misc
+    "Plastic glooves": waste_misc
+    "Plastic utensils": waste_misc
+    "Squeezable tube": waste_misc
+    "Plastic straw": waste_misc
+    "Paper straw": waste_misc
+    "Styrofoam piece": waste_misc
+    "Unlabeled litter": waste_misc
+    "Foam cup": waste_misc
+    "Disposable plastic cup": waste_misc
+    "Other plastic cup": waste_misc
+    "Rope & strings": waste_misc
+    Shoe: waste_misc
+    # ── 道路障碍（原 large_obstacle 拆分） ──
+    Furniture: road_misc
+    Tire: road_misc
+    "Large object": road_misc
+    "Construction debris": road_misc
+
+  # street_obstacle: 22 YOLO classes → 细粒度标签
+  street_obstacle:
+    0: discard             # chair
+    1: road_barrier        # fence → barrier
+    2: road_bin            # garbage bin
+    3: discard             # pole
+    4: road_misc           # obstacle → general obstacle
+    5: road_tree           # tree
+    6: road_plantpot       # plant pot
+    7: discard             # stair
+    8: discard             # bad road
+    9: person              # street vendor
+    10: discard            # drain
+    11: discard            # pothole
+    12: road_barrier       # gate barrier
+    13: stain_water        # puddle
+    14: road_motorcycle    # motorcycle
+    15: road_car           # car
+    16: discard            # left turn
+    17: person             # pedestrian
+    18: road_barrier       # roadblock → barrier
+    19: road_door          # door
+    20: discard            # right turn
+    21: discard            # zebra cross
+
+  # garbage_classify: 40 Chinese garbage classes → 细粒度标签
+  garbage_classify:
+    0: waste_misc         # 其他垃圾/一次性快餐盒
+    1: waste_misc         # 其他垃圾/污损塑料
+    2: waste_misc         # 其他垃圾/烟蒂 → waste_misc (TACO already has it)
+    3: waste_misc         # 其他垃圾/牙签
+    4: waste_misc         # 其他垃圾/破碎花盆及碟碗
+    5: waste_misc         # 其他垃圾/竹筷
+    6: kitchen_waste      # 厨余垃圾/剩饭剩菜
+    7: kitchen_waste      # 厨余垃圾/大骨头
+    8: kitchen_waste      # 厨余垃圾/水果果皮
+    9: kitchen_waste      # 厨余垃圾/水果果肉
+    10: kitchen_waste     # 厨余垃圾/茶叶渣
+    11: kitchen_waste     # 厨余垃圾/菜叶菜根
+    12: kitchen_waste     # 厨余垃圾/蛋壳
+    13: kitchen_waste     # 厨余垃圾/鱼骨
+    14: rec_metal         # 可回收物/充电宝
+    15: waste_misc        # 可回收物/包
+    16: rec_glass         # 可回收物/化妆品瓶
+    17: rec_plastic       # 可回收物/塑料玩具
+    18: rec_plastic       # 可回收物/塑料碗盆
+    19: rec_plastic       # 可回收物/塑料衣架
+    20: rec_paper         # 可回收物/快递纸袋
+    21: rec_metal         # 可回收物/插头电线
+    22: waste_misc        # 可回收物/旧衣服
+    23: rec_metal         # 可回收物/易拉罐
+    24: waste_misc        # 可回收物/枕头
+    25: waste_misc        # 可回收物/毛绒玩具
+    26: rec_plastic       # 可回收物/洗发水瓶
+    27: rec_glass         # 可回收物/玻璃杯
+    28: waste_misc        # 可回收物/皮鞋
+    29: waste_misc        # 可回收物/砧板
+    30: rec_paper         # 可回收物/纸板箱
+    31: rec_glass         # 可回收物/调料瓶
+    32: rec_glass         # 可回收物/酒瓶
+    33: rec_metal         # 可回收物/金属食品罐
+    34: rec_metal         # 可回收物/锅
+    35: rec_plastic       # 可回收物/食用油桶
+    36: rec_plastic       # 可回收物/饮料瓶
+    37: hazardous         # 有害垃圾/干电池
+    38: hazardous         # 有害垃圾/软膏
+    39: hazardous         # 有害垃圾/过期药物
+
+  # datas: COCO 4 classes → 细粒度标签
+  datas:
+    person: person
+    trafficcone: road_cone
+    car: road_car
+    pothole: discard
+
+  # puddle: VOC → stain_water
+  puddle:
+    water: stain_water
+
+  # puddle_large: YOLO → stain_water
+  puddle_large:
+    0: stain_water
+
+  # leaf_classify: 已禁用
+  # trashnet: 已禁用
+
+  # garbages: 文件夹分类 4 大类 → 细粒度标签（7,000 sample per class）
+  garbages:
+    Harmful: hazardous          # 有害垃圾
+    Kitchen: kitchen_waste      # 厨余垃圾
+    Other: waste_misc           # 其他垃圾
+    Recyclable: "@split_recyclable"   # 特殊: 均分为 rec_plastic/rec_metal/rec_glass/rec_paper

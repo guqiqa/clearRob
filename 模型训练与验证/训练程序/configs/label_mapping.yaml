@@ -8,10 +8,9 @@ target_classes:
   1: kitchen_waste    # 厨余垃圾
   2: hazardous        # 有害垃圾
   3: other_waste      # 其他垃圾
-  4: green_waste      # 绿化垃圾 (TACO中无)
-  5: large_obstacle   # 大件障碍物 (TACO中无)
-  6: pedestrian_pet   # 行人/宠物 (TACO中无)
-  7: stain            # 污渍/水渍 (TACO中无)
+  4: road_obstacle    # 道路障碍物（非垃圾，需绕行）
+  5: pedestrian_pet   # 行人/宠物/骑行者
+  6: stain            # 污渍/水渍
 
 mappings:
   taco:
@@ -92,11 +91,11 @@ mappings:
   street_obstacle:
     0: discard           # chair — 室内家具, 丢弃
     1: discard           # fence — 固定设施, 丢弃
-    2: large_obstacle    # garbage bin — 垃圾桶是路边常见障碍物
+    2: road_obstacle     # garbage bin — 垃圾桶=路边障碍物
     3: discard           # pole — 电线杆, 固定设施, 丢弃
-    4: large_obstacle    # obstacle — 通用障碍物, 语义一致
-    5: large_obstacle    # tree — 路边树木, 常见障碍物
-    6: large_obstacle    # plant pot — 花盆, 路边常见障碍物
+    4: road_obstacle     # obstacle — 通用障碍物, 语义一致
+    5: road_obstacle     # tree — 路边树木, 障碍物
+    6: road_obstacle     # plant pot — 花盆, 路边障碍物
     7: discard           # stair — 台阶, 丢弃
     8: discard           # bad road — 路面状况, 丢弃
     9: pedestrian_pet    # street vendor — 摊贩=人
@@ -104,12 +103,12 @@ mappings:
     11: discard          # pothole — 路面坑洞, 丢弃
     12: discard          # gate barrier — 闸门, 丢弃
     13: stain            # puddle — 积水=污渍
-    14: discard          # motorcycle — 机动车, 丢弃
-    15: discard          # car — 机动车, 丢弃
+    14: road_obstacle    # motorcycle — 机动车=道路障碍物
+    15: road_obstacle    # car — 机动车=道路障碍物
     16: discard          # left turn — 交通标志, 丢弃
     17: pedestrian_pet   # pedestrian — 行人
-    18: large_obstacle   # roadblock — 路障=大件障碍物
-    19: discard          # door — 门, 丢弃
+    18: road_obstacle    # roadblock — 路障=道路障碍物
+    19: road_obstacle    # door — 门, 道路障碍物
     20: discard          # right turn — 交通标志, 丢弃
     21: discard          # zebra cross — 斑马线, 丢弃
 
@@ -166,16 +165,15 @@ mappings:
     plastic: recyclable         # 塑料
     trash: other_waste          # 不可分辨垃圾
 
-  # classify-leaves: 176 树叶品种 → green_waste（绿化垃圾）
-  # 单叶实验室数据，非街景落叶，但填充 green_waste 缺口
-  leaf_classify:
-    "*": green_waste           # 全部 176 种 → green_waste
+  # classify-leaves: 已禁用（V6 取消 green_waste 分类）
+  # leaf_classify:
+  #   "*": green_waste           # 全部 176 种 → green_waste
 
-  # datas: COCO 检测 4 类 → pedestrian_pet / large_obstacle
+  # datas: COCO 检测 4 类 → road_obstacle / pedestrian_pet
   datas:
-    person: pedestrian_pet     # 行人 → 行人/宠物 (52,153 框!)
-    trafficcone: large_obstacle # 锥桶 → 大件障碍物
-    car: discard               # 机动车, 丢弃
+    person: pedestrian_pet     # 行人 (cap=3)
+    trafficcone: road_obstacle # 锥桶 → 道路障碍物
+    car: road_obstacle         # 机动车 → 道路障碍物 (17,556 框!)
     pothole: discard           # 路面坑洞, 丢弃
 
   # 积水检测 VOC 数据集 → stain

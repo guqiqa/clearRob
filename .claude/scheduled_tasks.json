@@ -1,15 +1,3 @@
 {
-  "tasks": [
-    {
-      "id": "0b8bceda",
-      "cron": "3,33 * * * *",
-      "prompt": "Update training record: 1) Read latest results from \"d:\\AIview\\模型训练与验证\\训练程序\\runs\\balanced_v5\\results.csv\", 2) Check for crash/stall/collapse, 3) Update section 2 (results table) and section 6 (epoch log) in \"d:\\AIview\\模型训练与验证\\训练记录.md\" with new data, 4) Update section 7 (progress estimate). If training has completed (no new epochs for >30 min) or collapsed (mAP50<0.01), report to user immediately instead of updating silently.",
-      "createdAt": 1781515031466,
-      "lastFiredAt": 1781521421508,
-      "recurring": true,
-      "createdBySessionId": "d7afdad6-fa6c-434f-82f5-932472730812",
-      "createdByPid": 2520,
-      "createdByProcStart": "639168968501122280"
-    }
-  ]
+  "tasks": []
 }

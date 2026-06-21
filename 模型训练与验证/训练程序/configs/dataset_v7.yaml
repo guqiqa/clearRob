@@ -1,0 +1,29 @@
+# V7 细粒度训练 — 20类 → 推理后合并为7类
+path: d:/AIview/模型训练与验证/数据集/processed_v7
+train: train/images
+val: val/images
+test: test/images
+
+names:
+  0: rec_plastic
+  1: rec_metal
+  2: rec_glass
+  3: rec_paper
+  4: kitchen_waste
+  5: hazardous
+  6: waste_cigarette
+  7: waste_misc
+  8: road_car
+  9: road_motorcycle
+  10: road_cone
+  11: road_tree
+  12: road_bin
+  13: road_plantpot
+  14: road_barrier
+  15: road_door
+  16: road_misc
+  17: person
+  18: stain_water
+  19: stain_misc
+
+nc: 20

@@ -607,7 +607,10 @@ def main():
     for ds in source_config["datasets"]:
         name = ds["name"]
         if name in args.skip:
-            print(f"\n[{name}] SKIPPED")
+            print(f"\n[{name}] SKIPPED (--skip)")
+            continue
+        if ds.get("enabled") is False:
+            print(f"\n[{name}] SKIPPED (enabled=false)")
             continue
 
         fmt = ds["format"]

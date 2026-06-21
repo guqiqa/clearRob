@@ -1,17 +1,16 @@
-# 数据集配置 — TACO 转换后 8 类目标检测
+# V6 数据集配置 — 7 类（暂取消 green_waste）
 path: d:/AIview/模型训练与验证/数据集/processed
 train: train/images
 val: val/images
 test: test/images
 
 names:
-  0: recyclable       # 可回收垃圾 (1311 框)
-  1: kitchen_waste    # 厨余垃圾 (7 框, 极少)
-  2: hazardous        # 有害垃圾 (2 框, 极少)
-  3: other_waste      # 其他垃圾 (2063 框)
-  4: green_waste      # 绿化垃圾 (0, TACO 无)
-  5: large_obstacle   # 大件障碍物 (0, TACO 无)
-  6: pedestrian_pet   # 行人/宠物 (0, TACO 无)
-  7: stain            # 污渍/水渍 (0, TACO 无)
+  0: recyclable       # 可回收垃圾
+  1: kitchen_waste    # 厨余垃圾
+  2: hazardous        # 有害垃圾
+  3: other_waste      # 其他垃圾
+  4: road_obstacle    # 道路障碍物（非垃圾，需绕行）
+  5: pedestrian_pet   # 行人/宠物/骑行者
+  6: stain            # 污渍/积水
 
-nc: 8
+nc: 7

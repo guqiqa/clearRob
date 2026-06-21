@@ -1,0 +1,67 @@
+# ============================================================
+# 细粒度标签定义 — V7 双层分类体系
+# 层1: 细粒度标签 (训练使用, ~20类, 减少类内方差)
+# 层2: 粗粒度标签 (推理后合并, 7类, 对应需求文档)
+# ============================================================
+
+# ── 细粒度标签 (训练用) ──
+fine_classes:
+  0: rec_plastic        # 可回收-塑料 (塑料瓶/容器/包装)
+  1: rec_metal          # 可回收-金属 (易拉罐/喷雾罐/金属盖)
+  2: rec_glass          # 可回收-玻璃 (玻璃瓶/罐/杯)
+  3: rec_paper          # 可回收-纸类 (纸板/纸袋/纸杯/纸盒)
+  4: kitchen_waste      # 厨余垃圾
+  5: hazardous          # 有害垃圾
+  6: waste_cigarette    # 烟头（高频小目标，单独一类）
+  7: waste_misc         # 其他垃圾（塑料袋/餐具/泡沫/杂物）
+  8: road_car           # 道路障碍-汽车 (含轿车/SUV)
+  9: road_motorcycle    # 道路障碍-摩托车/电动车
+  10: road_cone         # 道路障碍-锥桶
+  11: road_tree         # 道路障碍-树木/灌木
+  12: road_bin          # 道路障碍-垃圾桶/容器
+  13: road_plantpot     # 道路障碍-花盆
+  14: road_barrier      # 道路障碍-路障/栅栏/闸门
+  15: road_door         # 道路障碍-门
+  16: road_misc         # 道路障碍-杂项 (通用障碍物/家具/建材)
+  17: person            # 行人 (含骑行者/摊贩)
+  18: stain_water       # 积水
+  19: stain_misc        # 污渍/其他水渍
+
+# ── 粗粒度合并表 (推理后合并) ──
+# 模型输出细粒度ID → 合并为目标7类
+fine_to_coarse:
+  # rec_* → recyclable
+  0: 0    # recyclable
+  1: 0
+  2: 0
+  3: 0
+  # kitchen / hazardous / waste_* → 各自
+  4: 1    # kitchen_waste
+  5: 2    # hazardous
+  6: 3    # other_waste (waste_cigarette)
+  7: 3    # other_waste (waste_misc)
+  # road_* → road_obstacle
+  8: 4    # road_obstacle
+  9: 4
+  10: 4
+  11: 4
+  12: 4
+  13: 4
+  14: 4
+  15: 4
+  16: 4
+  # person → pedestrian_pet
+  17: 5   # pedestrian_pet
+  # stain_* → stain
+  18: 6   # stain
+  19: 6
+
+# ── 粗粒度类别名 (7类, 对应需求文档) ──
+coarse_names:
+  0: recyclable
+  1: kitchen_waste
+  2: hazardous
+  3: other_waste
+  4: road_obstacle
+  5: pedestrian_pet
+  6: stain

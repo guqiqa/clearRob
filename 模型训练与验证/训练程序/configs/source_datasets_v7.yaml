@@ -1,52 +1,66 @@
-# 数据源注册 — 每个数据集的位置、格式与映射
+# V7 数据源注册 — 指向细粒度标签映射
 datasets:
   - name: taco
     path: "../数据集/raw/taco"
     format: "coco_taco"
     mapping: "taco"
+    mapping_file: "label_mapping_v7.yaml"
     annotation_file: "annotations.json"
 
   - name: garbage_classify
     path: "../数据集/raw/garbage_classify"
     format: "classify_csv"
     mapping: "garbage_classify"
-    enabled: true               # 重新启用, 唯一覆盖垃圾类来源
+    mapping_file: "label_mapping_v7.yaml"
+    enabled: false              # 已替换为 garbages
+
+  - name: garbages
+    path: "../数据集/raw/garbages"
+    format: "folder_balanced"
+    mapping: "garbages"
+    mapping_file: "label_mapping_v7.yaml"
+    enabled: true
+    samples_per_class: 7000     # 每类最多 7,000 张（总计 28,000）
 
   - name: street_obstacle
     path: "../数据集"
     format: "yolo_remap"
     mapping: "street_obstacle"
+    mapping_file: "label_mapping_v7.yaml"
 
   - name: trashnet
     path: "../数据集/raw/trashnet"
     format: "folder_class"
     mapping: "trashnet"
-    enabled: false              # 分类转换数据, 全图框已禁用
+    enabled: false
 
   - name: leaf_classify
     path: "../数据集/raw/leaf_classify"
     format: "csv_classify"
     mapping: "leaf_classify"
-    enabled: false              # 分类转换数据, 全图框已禁用
+    enabled: false
 
   - name: datas
     path: "../数据集/raw/datas"
     format: "coco_flat"
     mapping: "datas"
+    mapping_file: "label_mapping_v7.yaml"
     annotation_file: "train.json"
     per_class_cap:
-      pedestrian_pet: 3          # person 每图最多 3 框 (52k→12.5k)
-      road_obstacle: 5           # car 每图最多 5 框 (17.5k→~14k)
+      person: 3
+      road_car: 5
 
   - name: puddle
     path: "../数据集/raw/puddle"
     format: "voc_xml"
     mapping: "puddle"
+    mapping_file: "label_mapping_v7.yaml"
 
   - name: puddle_large
     path: "../数据集/raw/puddle_large"
-    format: "yolo_remap"          # 已有YOLO txt, 只需 class_id 0→7
+    format: "yolo_remap"
     mapping: "puddle_large"
+    mapping_file: "label_mapping_v7.yaml"
 
   - name: self_collected
     path: "../数据集/raw/self_collected"
