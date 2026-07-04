@@ -1,0 +1,19 @@
+V11_on_V12: mAP50=0.6093 mAP50-95=0.4921 P=0.6267 R=0.6297
+recyclable: AP50=0.6138
+kitchen_waste: AP50=0.7833
+hazardous: AP50=0.3300
+other_waste: AP50=0.1532
+green_waste: AP50=0.9350
+road_obstacle: AP50=0.7579
+pedestrian_pet: AP50=0.4251
+stain: AP50=0.8760
+
+V12_on_V11: mAP50=0.7910 mAP50-95=0.6371 P=0.7969 R=0.7465
+recyclable: AP50=0.8531
+kitchen_waste: AP50=0.8955
+hazardous: AP50=0.9304
+other_waste: AP50=0.8869
+green_waste: AP50=0.9150
+road_obstacle: AP50=0.6670
+pedestrian_pet: AP50=0.3916
+stain: AP50=0.7887

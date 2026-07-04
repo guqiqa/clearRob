@@ -1,0 +1,17 @@
+# V8 数据集配置 — 全部数据集（除TACO）合并，7 类
+path: d:/AIview/模型训练与验证/数据集/processed_v8
+train: train/images
+val: val/images
+test: test/images
+
+names:
+  0: recyclable       # 可回收垃圾
+  1: kitchen_waste    # 厨余垃圾
+  2: hazardous        # 有害垃圾
+  3: other_waste      # 其他垃圾
+  4: green_waste      # 绿化垃圾
+  5: road_obstacle    # 道路障碍物（非垃圾）
+  6: pedestrian_pet   # 行人/宠物
+  7: stain            # 污渍/积水
+
+nc: 8

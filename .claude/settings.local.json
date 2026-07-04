@@ -2,8 +2,35 @@
   "permissions": {
     "allow": [
       "Bash(python3)",
+      "Bash(python)",
       "Bash(powershell.exe -Command 'Get-ChildItem \"HKCU:\\\\Software\\\\Python\\\\PythonCore\" -Recurse 2>$null | Where-Object { $_.PSChildName -like \"*Continuum*\" -or $_.PSChildName -like \"*Anaconda*\" } | ForEach-Object { $_.PSPath }')",
       "Bash(powershell.exe -Command 'Get-ChildItem \"HKCU:\\\\Software\\\\Python\\\\ContinuumAnalytics\" -ErrorAction SilentlyContinue | ForEach-Object { $_.PSPath }')"
     ]
+  },
+  "hooks": {
+    "PreCompact": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "python ~/.claude/skills/conversation-checkpoint/scripts/save-checkpoint.py",
+        "timeout": 30
+      }]
+    }],
+    "StopFailure": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "python ~/.claude/skills/conversation-checkpoint/scripts/save-checkpoint.py --emergency",
+        "timeout": 15
+      }]
+    }],
+    "SessionStart": [{
+      "matcher": "resume|compact",
+      "hooks": [{
+        "type": "command",
+        "command": "python ~/.claude/skills/conversation-checkpoint/scripts/inject-checkpoint.py",
+        "timeout": 15
+      }]
+    }]
   }
 }

@@ -286,7 +286,7 @@ class FusionEngineNode(Node):
             # ---------------------------------------------------------------
             # 2D -> angular sector estimate
             # ---------------------------------------------------------------
-            bbox_cx_pix = (detection.x1 + detection.x2) / 2.0
+            bbox_cx_pix = (detection.xmin + detection.xmax) / 2.0
             # Angular offset from principal point
             dx = bbox_cx_pix - cx
             ang_center = math.atan2(dx, fx)
@@ -311,8 +311,10 @@ class FusionEngineNode(Node):
                 if angle_diff < assoc_max_angle and angle_diff < best_angle_diff:
                     # Extra check: distance consistency
                     match_dist = math.hypot(obs.position.x, obs.position.y)
+                    # Compute bounding box area from corner coordinates
+                    bbox_area = (detection.xmax - detection.xmin) * (detection.ymax - detection.ymin)
                     est_dist = self._estimate_distance_from_area(
-                        detection.pixel_area, cam_height
+                        bbox_area, cam_height
                     )
                     if abs(match_dist - est_dist) < assoc_max_dist:
                         best_angle_diff = angle_diff
@@ -338,8 +340,9 @@ class FusionEngineNode(Node):
                 lidar_matched = True
             else:
                 # No LiDAR match -- estimate from pixel area
+                bbox_area = (detection.xmax - detection.xmin) * (detection.ymax - detection.ymin)
                 est_z = self._estimate_distance_from_area(
-                    detection.pixel_area, cam_height
+                    bbox_area, cam_height
                 )
                 position_3d = Point(x=est_z, y=0.0, z=0.0)
                 dimensions = Vector3(x=0.1, y=0.1, z=0.1)

@@ -1,0 +1,50 @@
+# V9 crash-safe: real detection only, 36% full-image supplement for garbage classes
+datasets:
+  # ── REAL DETECTION ──
+  - name: taco
+    path: "../数据集/raw/taco"
+    format: "coco_taco"
+    mapping: "taco_v9"
+    annotation_file: "annotations.json"
+
+  - name: datas
+    path: "../数据集/raw/datas"
+    format: "coco_flat"
+    mapping: "datas_v9"
+    annotation_file: "train.json"
+    per_class_cap:
+      pedestrian_pet: 3
+      road_obstacle: 5
+
+  - name: street_obstacle
+    path: "../数据集"
+    format: "yolo_remap"
+    mapping: "street_obstacle_v9"
+
+  - name: puddle_voc
+    path: "../数据集/raw/puddle_voc"
+    format: "voc_xml"
+    mapping: "puddle_v9"
+
+  - name: puddle_large
+    path: "../数据集/raw/puddle_large"
+    format: "yolo_remap"
+    mapping: "puddle_large_v9"
+
+  - name: self_collected
+    path: "../数据集/raw/self_collected"
+    format: "labelme_json"
+    mapping: "self_v9"
+
+  # ── FULL-IMAGE SUPPLEMENT (sampled, 5,094 per garbage class) ──
+  - name: garbages
+    path: "../数据集/raw/garbages"
+    format: "folder_class"
+    mapping: "garbages_v9"
+    samples_per_class: 5094
+
+  - name: leaf_classify
+    path: "../数据集/raw/leaf_classify"
+    format: "csv_classify"
+    mapping: "leaf_v9"
+    samples_per_class: 5094

@@ -39,21 +39,31 @@ from cleaning_robot_interfaces.msg import (
 )
 from cleaning_robot_interfaces.srv import SetModel, GetStatus
 
+# ---- Real YOLO backend ----
+try:
+    from vision_detector.yolo_detector import YOLODetector, Detection as RealDetection
+    _HAS_ONNX = True
+except ImportError:
+    _HAS_ONNX = False
+
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
 CLASS_NAMES = [
-    "other_waste",
-    "green_waste",
     "recyclable",
     "kitchen_waste",
+    "hazardous",
+    "other_waste",
+    "green_waste",
     "road_obstacle",
     "pedestrian_pet",
-    "hazardous",
     "stain",
 ]
+# V11 model class order (must match model config):
+#   0=recyclable, 1=kitchen_waste, 2=hazardous, 3=other_waste, 4=green_waste,
+#   5=road_obstacle, 6=pedestrian_pet, 7=stain
 
 # Class IDs that count as "garbage" for cleanliness scoring
 GARBAGE_CLASS_IDS = {0, 1, 2, 3, 4}
@@ -117,6 +127,10 @@ class VisionDetectorNode(LifecycleNode):
         self._degraded_fps: float = 0.0
         self._no_detection_start: Optional[float] = None
         self._camera_last_time: Optional[float] = None
+        # Camera image timestamp — stored from _on_image callback.
+        # Used as DetectionArray.header.stamp per the timestamp contract
+        # (must equal sensor_msgs/Image.header.stamp, NOT node clock).
+        self._camera_stamp = None
 
         # Model switch state
         self._model_switching: bool = False
@@ -132,6 +146,9 @@ class VisionDetectorNode(LifecycleNode):
         # Timers
         self._infer_timer: Optional[Timer] = None
         self._heartbeat_timer: Optional[Timer] = None
+
+        # Real YOLO detector (loaded in on_configure when use_real_model=true)
+        self._detector = None
 
         # Start time
         self._start_time: float = time.time()
@@ -164,7 +181,12 @@ class VisionDetectorNode(LifecycleNode):
         self._in_degraded_mode = False
         self._no_detection_start = None
         self._camera_last_time = None
+        self._camera_stamp = None
+        self._detector = None
         self._start_time = time.time()
+
+        # ---- Load YOLO model ----
+        self._load_model()
 
         # Subscriptions
         self.create_subscription(
@@ -244,10 +266,10 @@ class VisionDetectorNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _declare_params(self) -> None:
-        self.declare_parameter("model_path", "/path/to/models/cleaning_v1.0.0_s_best.engine")
-        self.declare_parameter("model_config", "/path/to/models/cleaning_v1.0.0_s_config.yaml")
-        self.declare_parameter("model_version", "yolov8")
-        self.declare_parameter("conf_threshold", 0.45)
+        self.declare_parameter("model_path", "/opt/cleaning_robot/models/cleaning_v1.0.0_s_best.onnx")
+        self.declare_parameter("model_config", "/opt/cleaning_robot/models/cleaning_v1.0.0_s_config.yaml")
+        self.declare_parameter("model_version", "yolo11")
+        self.declare_parameter("conf_threshold", 0.25)
         self.declare_parameter("nms_iou_threshold", 0.45)
         self.declare_parameter("input_width", 640)
         self.declare_parameter("input_height", 640)
@@ -264,6 +286,8 @@ class VisionDetectorNode(LifecycleNode):
         self.declare_parameter("simulate_camera", True)
         self.declare_parameter("camera_width", 1280)
         self.declare_parameter("camera_height", 720)
+        self.declare_parameter("use_real_model", True)
+        self.declare_parameter("simulate_detections", False)
 
     def _read_params(self) -> None:
         """Read all declared parameters into self._params dict."""
@@ -281,6 +305,7 @@ class VisionDetectorNode(LifecycleNode):
         for name in [
             "half_precision", "max_batch_size", "enable_tracking",
             "publish_annotated_image", "simulate_camera",
+            "use_real_model", "simulate_detections",
         ]:
             self._params[name] = self.get_parameter(name).get_parameter_value().bool_value
 
@@ -329,6 +354,9 @@ class VisionDetectorNode(LifecycleNode):
         if self._fault:
             return
         self._camera_last_time = time.time()
+        # Save camera image timestamp for DetectionArray contract compliance.
+        # This MUST be the image's original capture time, not node clock.
+        self._camera_stamp = msg.header.stamp
 
     def _on_mode(self, msg: TaskMode) -> None:
         prev_mode = self._mode
@@ -389,6 +417,82 @@ class VisionDetectorNode(LifecycleNode):
         return response
 
     # ------------------------------------------------------------------
+    # Model loading
+    # ------------------------------------------------------------------
+
+    def _load_model(self) -> None:
+        """Load the YOLO model via ONNX Runtime (or skip if simulate_detections)."""
+        if not self._params.get("use_real_model", True):
+            self.get_logger().info("use_real_model=false, using simulated detections")
+            return
+
+        if not _HAS_ONNX:
+            self.get_logger().warn(
+                "onnxruntime not available, falling back to simulated detections. "
+                "Install with: pip install onnxruntime"
+            )
+            return
+
+        model_path = self._params.get("model_path", "")
+        if not model_path or not os.path.exists(model_path):
+            self.get_logger().warn(
+                f"Model file not found: {model_path}. "
+                "Falling back to simulated detections."
+            )
+            return
+
+        try:
+            detector = YOLODetector(
+                model_path=model_path,
+                class_names=list(CLASS_NAMES),
+                conf_threshold=self._params.get("conf_threshold", 0.25),
+                iou_threshold=self._params.get("nms_iou_threshold", 0.45),
+                input_size=(
+                    self._params.get("input_width", 640),
+                    self._params.get("input_height", 640),
+                ),
+            )
+            if detector.load():
+                self._detector = detector
+                self._active_model = model_path
+                self.get_logger().info(
+                    f"YOLO detector loaded: {model_path} "
+                    f"(classes={len(CLASS_NAMES)}, "
+                    f"conf={detector._conf:.2f}, iou={detector._iou:.2f})"
+                )
+            else:
+                self.get_logger().warn("Detector load() returned False, using simulated mode")
+        except Exception as exc:
+            self.get_logger().error(f"Failed to load model: {exc}. Falling back to simulated mode.")
+
+    def _run_real_inference(self, img_width: int, img_height: int):
+        """Run the real ONNX detector on a simulated camera frame.
+
+        Returns (list_of_Detection, inference_time_ms).
+        When no camera is connected, generates a synthetic image for the detector.
+        """
+        from vision_detector.yolo_detector import Detection as RealDet
+
+        # Generate synthetic camera-like image (random RGB noise)
+        test_img = np.random.randint(0, 255, (img_height, img_width, 3), dtype=np.uint8)
+
+        raw_dets, inf_ms = self._detector.detect(test_img)
+
+        # Convert YOLODetector.Detection → cleaning_robot_interfaces Detection
+        detections = []
+        for rd in raw_dets:
+            det = Detection()
+            det.class_name = rd.class_name
+            det.confidence = float(rd.confidence)
+            det.class_id = rd.class_id
+            det.xmin = rd.xmin
+            det.ymin = rd.ymin
+            det.xmax = rd.xmax
+            det.ymax = rd.ymax
+            detections.append(det)
+        return detections, inf_ms
+
+    # ------------------------------------------------------------------
     # Inference tick
     # ------------------------------------------------------------------
 
@@ -405,13 +509,8 @@ class VisionDetectorNode(LifecycleNode):
         # --- Fault: camera timeout ---
         self._check_camera_timeout(now)
 
-        # --- Generate or use input image ---
         image_width = self._params["camera_width"]
         image_height = self._params["camera_height"]
-
-        # --- Simulate inference latency ---
-        inference_ms = max(0.0, random.gauss(28.0, 5.0))
-        inference_ms = max(20.0, min(40.0, inference_ms))
 
         # Degraded-mode rate limiting: skip frames
         if self._in_degraded_mode:
@@ -422,9 +521,14 @@ class VisionDetectorNode(LifecycleNode):
         else:
             effective_fps = self._params["target_fps"]
 
-        # --- Simulated detections ---
+        # --- Run inference ---
         self._frame_seq += 1
-        detections = self._simulate_detections(image_width, image_height)
+
+        if self._detector is not None:
+            detections, inference_ms = self._run_real_inference(image_width, image_height)
+        else:
+            detections = self._simulate_detections(image_width, image_height)
+            inference_ms = max(20.0, min(40.0, random.gauss(28.0, 5.0)))
 
         # --- Filter per mode ---
         detections = self._filter_by_mode(detections)
@@ -458,8 +562,10 @@ class VisionDetectorNode(LifecycleNode):
         else:
             num_detections = random.randint(0, 8)
 
-        # Class distribution weights
-        class_weights = [0.30, 0.20, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05]
+        # Class distribution weights (matches V11 data distribution)
+        # 0=recyclable 1=kitchen_waste 2=hazardous 3=other_waste 4=green_waste
+        # 5=road_obstacle 6=pedestrian_pet 7=stain
+        class_weights = [0.15, 0.10, 0.05, 0.30, 0.20, 0.10, 0.05, 0.05]
         class_ids = random.choices(range(8), weights=class_weights, k=num_detections)
 
         detections: List[Detection] = []
@@ -478,11 +584,10 @@ class VisionDetectorNode(LifecycleNode):
             det.class_name = CLASS_NAMES[cid]
             det.confidence = float(conf)
             det.class_id = cid
-            det.x1 = float(x1)
-            det.y1 = float(y1)
-            det.x2 = float(x2)
-            det.y2 = float(y2)
-            det.pixel_area = float(w * h)
+            det.xmin = int(x1)
+            det.ymin = int(y1)
+            det.xmax = int(x2)
+            det.ymax = int(y2)
             detections.append(det)
 
         return detections
@@ -525,7 +630,8 @@ class VisionDetectorNode(LifecycleNode):
 
         # Only garbage classes (0-4) count for cleanliness
         garbage_area = sum(
-            d.pixel_area for d in detections if d.class_id in GARBAGE_CLASS_IDS
+            (d.xmax - d.xmin) * (d.ymax - d.ymin)
+            for d in detections if d.class_id in GARBAGE_CLASS_IDS
         )
         garbage_ratio = garbage_area / max(total_pixels, 1.0)
         cleanliness = max(0.0, 1.0 - garbage_ratio / saturation)
@@ -561,12 +667,12 @@ class VisionDetectorNode(LifecycleNode):
             if d.class_id not in OBSTACLE_CLASS_IDS:
                 continue
             # Only obstacles that intersect the lower half
-            if d.y2 <= half_start:
+            if d.ymax <= half_start:
                 continue
-            y1_local = max(0, int(d.y1) - half_start)
-            y2_local = min(half_height, max(0, int(d.y2) - half_start))
-            x1_local = max(0, int(d.x1))
-            x2_local = min(img_width, int(d.x2))
+            y1_local = max(0, int(d.ymin) - half_start)
+            y2_local = min(half_height, max(0, int(d.ymax) - half_start))
+            x1_local = max(0, int(d.xmin))
+            x2_local = min(img_width, int(d.xmax))
             if y2_local > y1_local and x2_local > x1_local:
                 mask[y1_local:y2_local, x1_local:x2_local] = 0
 
@@ -604,7 +710,13 @@ class VisionDetectorNode(LifecycleNode):
             return
 
         msg = DetectionArray()
-        msg.header.stamp = self.get_clock().now().to_msg()
+        # Per timestamp contract: MUST use camera image timestamp, NOT node clock.
+        # Falls back to node clock only when no camera frame has been received yet
+        # (e.g. during startup or simulated mode without camera input).
+        if self._camera_stamp is not None:
+            msg.header.stamp = self._camera_stamp
+        else:
+            msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "camera_link"
         msg.detections = detections
         msg.frame_seq = self._frame_seq
@@ -667,8 +779,8 @@ class VisionDetectorNode(LifecycleNode):
         buf = np.full((h, w, 3), 60, dtype=np.uint8)
         # Draw detections as white rectangles
         for d in detections:
-            x1, y1 = int(d.x1), int(d.y1)
-            x2, y2 = int(d.x2), int(d.y2)
+            x1, y1 = d.xmin, d.ymin
+            x2, y2 = d.xmax, d.ymax
             buf[y1:y2, x1:x2] = [200, 200, 200]
 
         ros_img = Image()
@@ -719,6 +831,18 @@ class VisionDetectorNode(LifecycleNode):
             self._model_switching = False
             self._active_model = self._pending_model_name
             self.get_logger().info(f"Model switch complete: {self._active_model}")
+            # Reload the real detector if the path changed
+            if self._detector is not None or os.path.exists(self._active_model):
+                old_detector = self._detector
+                self._detector = None
+                if _HAS_ONNX and self._params.get("use_real_model", True):
+                    self._load_model()
+                    if self._detector is not None:
+                        self.get_logger().info("Hot-switch: new ONNX model loaded")
+                    else:
+                        self.get_logger().warn("Hot-switch failed, using simulated mode")
+                        if old_detector is not None:
+                            self._detector = old_detector  # fall back to old model
 
     def _check_camera_timeout(self, now: float) -> None:
         if self._camera_last_time is None:

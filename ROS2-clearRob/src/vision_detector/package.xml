@@ -3,7 +3,7 @@
 <package format="3">
   <name>vision_detector</name>
   <version>0.1.0</version>
-  <description>Vision-based garbage detection, drivable area inference, and cleanliness scoring for cleaning robot.</description>
+  <description>Vision-based garbage detection using YOLO11 ONNX model (V11, mAP50=0.720), drivable area inference, and cleanliness scoring.</description>
   <maintainer email="aiview@example.com">AIview Dev</maintainer>
   <license>Apache-2.0</license>
 

@@ -27,7 +27,6 @@ from geometry_msgs.msg import (
     Point, Point32, Polygon, Pose, PoseStamped, Twist, Vector3, Quaternion
 )
 from nav_msgs.msg import OccupancyGrid
-from sensor_msgs.msg import Image
 
 from cleaning_robot_interfaces.msg import (
     TaskArea, TaskMode, Path, PlannerState, ObstacleList, FusionDecision, Heartbeat,
@@ -254,8 +253,9 @@ class PathPlannerNode(Node):
         self._sub_fusion = self.create_subscription(
             FusionDecision, 'fusion/obstacle/decision', self._cb_fusion, reliable)
 
-        self._sub_drivable = self.create_subscription(
-            Image, 'vision/detect/drivable', self._cb_drivable, sensor_qos)
+        # NOTE: vision/detect/drivable is NOT consumed here.
+        # All visual obstacle data reaches path_planner through fusion_engine
+        # via fusion/obstacle/decision — see the physical isolation contract.
 
         # ----- Publishers -----
         self._pub_path = self.create_publisher(Path, 'planner/output/path', reliable)
@@ -339,9 +339,6 @@ class PathPlannerNode(Node):
     def _cb_fusion(self, msg: FusionDecision):
         self._fusion_decision = msg
         self._handle_fusion_decision(msg)
-
-    def _cb_drivable(self, msg: Image):
-        pass  # auxiliary — reserved for future drivable-area refinement
 
     # ------------------------------------------------------------------
     #  Global coverage path planning  (Boustrophedon decomposition)

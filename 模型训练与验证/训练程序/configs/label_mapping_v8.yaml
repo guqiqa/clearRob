@@ -1,0 +1,159 @@
+# V8 标签映射 — 全部数据源 → 7 粗类目标 (排除 TACO)
+
+target_classes:
+  0: recyclable
+  1: kitchen_waste
+  2: hazardous
+  3: other_waste
+  4: green_waste
+  5: road_obstacle
+  6: pedestrian_pet
+  7: stain
+
+mappings:
+
+  # ── garbages: 文件夹分类 4 大类 ──
+  garbages:
+    Harmful: hazardous
+    Kitchen: kitchen_waste
+    Other: other_waste
+    Recyclable: recyclable
+
+  # ── garbage_classify: 40 中国垃圾分类 ──
+  garbage_classify:
+    0: other_waste
+    1: other_waste
+    2: other_waste
+    3: other_waste
+    4: other_waste
+    5: other_waste
+    6: kitchen_waste
+    7: kitchen_waste
+    8: kitchen_waste
+    9: kitchen_waste
+    10: kitchen_waste
+    11: kitchen_waste
+    12: kitchen_waste
+    13: kitchen_waste
+    14: recyclable
+    15: recyclable
+    16: recyclable
+    17: recyclable
+    18: recyclable
+    19: recyclable
+    20: recyclable
+    21: recyclable
+    22: recyclable
+    23: recyclable
+    24: recyclable
+    25: recyclable
+    26: recyclable
+    27: recyclable
+    28: recyclable
+    29: recyclable
+    30: recyclable
+    31: recyclable
+    32: recyclable
+    33: recyclable
+    34: recyclable
+    35: recyclable
+    36: recyclable
+    37: hazardous
+    38: hazardous
+    39: hazardous
+
+  # ── classify-leaves: 176 树叶品种 → green_waste ──
+  leaf_classify:
+    "*": green_waste
+
+  # ── train/ (40 类，与 garbage_classify 同源) ──
+  train_classify:
+    0: other_waste
+    1: other_waste
+    2: other_waste
+    3: other_waste
+    4: other_waste
+    5: other_waste
+    6: kitchen_waste
+    7: kitchen_waste
+    8: kitchen_waste
+    9: kitchen_waste
+    10: kitchen_waste
+    11: kitchen_waste
+    12: kitchen_waste
+    13: kitchen_waste
+    14: recyclable
+    15: recyclable
+    16: recyclable
+    17: recyclable
+    18: recyclable
+    19: recyclable
+    20: recyclable
+    21: recyclable
+    22: recyclable
+    23: recyclable
+    24: recyclable
+    25: recyclable
+    26: recyclable
+    27: recyclable
+    28: recyclable
+    29: recyclable
+    30: recyclable
+    31: recyclable
+    32: recyclable
+    33: recyclable
+    34: recyclable
+    35: recyclable
+    36: recyclable
+    37: hazardous
+    38: hazardous
+    39: hazardous
+
+  # ── datas: COCO 检测 4 类 ──
+  datas:
+    person: pedestrian_pet
+    trafficcone: road_obstacle
+    car: road_obstacle
+    pothole: discard
+
+  # ── dataset-resized (TrashNet): 文件夹 6 类 ──
+  trashnet:
+    cardboard: recyclable
+    glass: recyclable
+    metal: recyclable
+    paper: recyclable
+    plastic: recyclable
+    trash: other_waste
+
+  # ── cb8c9-main (puddle): VOC XML ──
+  puddle_voc:
+    water: stain
+
+  # ── street_obstacle: 22 类 YOLO ──
+  street_obstacle:
+    0: discard            # chair
+    1: discard            # fence
+    2: road_obstacle      # garbage bin
+    3: discard            # pole
+    4: road_obstacle      # obstacle
+    5: road_obstacle      # tree
+    6: road_obstacle      # plant pot
+    7: discard            # stair
+    8: discard            # bad road
+    9: pedestrian_pet     # street vendor
+    10: discard           # drain
+    11: discard           # pothole
+    12: discard           # gate barrier
+    13: stain             # puddle → stain
+    14: road_obstacle     # motorcycle
+    15: road_obstacle     # car
+    16: discard           # left turn
+    17: pedestrian_pet    # pedestrian
+    18: road_obstacle     # roadblock
+    19: road_obstacle     # door
+    20: discard           # right turn
+    21: discard           # zebra cross
+
+  # ── puddle_large: YOLO 格式 ──
+  puddle_large:
+    0: stain

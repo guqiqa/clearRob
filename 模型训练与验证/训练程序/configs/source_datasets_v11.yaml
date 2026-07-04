@@ -1,0 +1,69 @@
+# V11: Real detection only. garbages replaced by trainval_voc (4691张 VOC真实框)
+# leaf_classify disabled (self-collected已经有了252张真实街景green_waste)
+datasets:
+  - name: taco
+    path: "../数据集/raw/taco"
+    format: "coco_taco"
+    mapping: "taco_v9"
+    annotation_file: "annotations.json"
+
+  - name: datas
+    path: "../数据集/raw/datas"
+    format: "coco_flat"
+    mapping: "datas_v9"
+    annotation_file: "train.json"
+    per_class_cap:
+      pedestrian_pet: 3
+      road_obstacle: 5
+
+  - name: street_obstacle
+    path: "../数据集"
+    format: "yolo_remap"
+    mapping: "street_obstacle_v9"
+
+  - name: puddle_voc
+    path: "../数据集/raw/puddle_voc"
+    format: "voc_xml"
+    mapping: "puddle_v9"
+
+  - name: puddle_large
+    path: "../数据集/raw/puddle_large"
+    format: "yolo_remap"
+    mapping: "puddle_large_v9"
+
+  - name: self_collected
+    path: "../数据集/raw/self_collected"
+    format: "labelme_json"
+    mapping: "self_v9"
+
+  - name: trainval_voc
+    path: "../数据集/raw/trainval_voc"
+    format: "voc_xml"
+    mapping: "trainval_voc"          # 46细类→4粗类, 已在label_mapping_v9.yaml
+
+  - name: garbages_annotated
+    path: "../数据集/raw/garbages_annotated"
+    format: "labelme_folder"        # 手动标注 LabelMe JSON, polygon→bbox
+    mapping: "garbages_annotated_v9"
+    enabled: true
+
+  - name: garbages
+    path: "../数据集/raw/garbages"
+    format: "folder_class"
+    mapping: "garbages_v9"
+    enabled: true
+    samples_per_class: 0
+    class_filter: ["Recyclable", "Kitchen", "Hazardous", "Other"]
+    samples_per_filtered:
+      Recyclable: 4500
+      Kitchen: 3500
+      Hazardous: 3500
+      Other: 4000
+    box_margin: 0.9
+
+  - name: leaf_classify
+    path: "../数据集/raw/leaf_classify"
+    format: "csv_classify"
+    mapping: "leaf_v9"
+    enabled: true
+    samples_per_class: 4000

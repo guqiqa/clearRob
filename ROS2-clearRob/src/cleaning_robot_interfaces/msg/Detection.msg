@@ -1,10 +1,18 @@
-# Single detection target
-# Coordinate system: x1,y1,x2,y2 are pixel coordinates (relative to original image resolution, top-left origin)
-string   class_name          # Class name
-float32  confidence          # Confidence 0.0~1.0
-uint16   class_id            # Class ID 0~7
-float32  x1                  # BBox top-left x (pixels)
-float32  y1                  # BBox top-left y (pixels)
-float32  x2                  # BBox bottom-right x (pixels)
-float32  y2                  # BBox bottom-right y (pixels)
-float32  pixel_area          # Pixel area = (x2-x1)*(y2-y1)
+# Single detection target (2D bounding box in pixel coordinates)
+#
+# Contract: published by vision_detector as part of DetectionArray.
+# Consumed primarily by fusion_engine for 2D→3D spatial association.
+#
+# Coordinate system: pixel coordinates relative to the original camera image
+# resolution, with origin at the top-left corner of the image.
+
+string   class_name          # Class name (must match the 8-class agreement: recyclable/kitchen_waste/hazardous/other_waste/green_waste/road_obstacle/pedestrian_pet/stain)
+float32  confidence          # Confidence score 0.0 ~ 1.0
+uint16   class_id            # Class ID 0 ~ 7
+
+# Bounding box — pixel coordinates (int32, whole-pixel precision is sufficient for LiDAR fusion;
+# sub-pixel YOLO outputs should be rounded to nearest integer).
+int32    xmin                # BBox top-left x (pixels, 0-indexed)
+int32    ymin                # BBox top-left y (pixels, 0-indexed)
+int32    xmax                # BBox bottom-right x (pixels, exclusive)
+int32    ymax                # BBox bottom-right y (pixels, exclusive)

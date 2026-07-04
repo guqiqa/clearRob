@@ -1,0 +1,218 @@
+# V13: 8-class detection (vehicle + road_obstacle merged → obstacle)
+# 0:recyclable 1:kitchen_waste 2:hazardous 3:other_waste 4:green_waste
+# 5:pedestrian 6:obstacle 7:stain
+
+target_classes:
+  0: recyclable
+  1: kitchen_waste
+  2: hazardous
+  3: other_waste
+  4: green_waste
+  5: pedestrian
+  6: obstacle
+  7: stain
+
+mappings:
+  # ===== 垃圾类（不变） =====
+  taco_v9:
+    "Clear plastic bottle": recyclable
+    "Other plastic bottle": recyclable
+    "Plastic bottle cap": recyclable
+    "Plastic lid": recyclable
+    "Glass bottle": recyclable
+    "Broken glass": recyclable
+    "Glass cup": recyclable
+    "Glass jar": recyclable
+    "Food Can": recyclable
+    Aerosol: recyclable
+    "Drink can": recyclable
+    "Aluminium foil": recyclable
+    "Metal bottle cap": recyclable
+    "Metal lid": recyclable
+    "Pop tab": recyclable
+    "Scrap metal": recyclable
+    "Aluminium blister pack": recyclable
+    "Carded blister pack": recyclable
+    "Other carton": recyclable
+    "Corrugated carton": recyclable
+    "Meal carton": recyclable
+    "Drink carton": recyclable
+    "Egg carton": recyclable
+    "Pizza box": recyclable
+    "Paper cup": recyclable
+    "Magazine paper": recyclable
+    "Normal paper": recyclable
+    "Paper bag": recyclable
+    "Wrapping paper": recyclable
+    "Plastified paper bag": recyclable
+    "Polypropylene bag": recyclable
+    "Disposable food container": recyclable
+    "Foam food container": recyclable
+    "Other plastic container": recyclable
+    Tupperware: recyclable
+    "Spread tub": recyclable
+    "Other plastic": recyclable
+    "Six pack rings": recyclable
+    "Toilet tube": recyclable
+    "Food waste": kitchen_waste
+    Battery: hazardous
+    Cigarette: other_waste
+    Tissues: other_waste
+    "Plastic film": other_waste
+    "Garbage bag": other_waste
+    "Other plastic wrapper": other_waste
+    "Single-use carrier bag": other_waste
+    "Crisp packet": other_waste
+    "Plastic glooves": other_waste
+    "Plastic utensils": other_waste
+    "Squeezable tube": other_waste
+    "Plastic straw": other_waste
+    "Paper straw": other_waste
+    "Styrofoam piece": other_waste
+    "Unlabeled litter": other_waste
+    "Foam cup": other_waste
+    "Disposable plastic cup": other_waste
+    "Other plastic cup": other_waste
+    "Rope & strings": other_waste
+    Shoe: other_waste
+    Furniture: obstacle
+    Tire: obstacle
+    "Large object": obstacle
+    "Construction debris": obstacle
+
+  garbages_v9:
+    Recyclable: recyclable
+    Kitchen: kitchen_waste
+    Harmful: hazardous
+    Other: other_waste
+
+  garbages_annotated_v9:
+    Harmful: hazardous
+    Kitchen: kitchen_waste
+    Other: other_waste
+    Recyclable: recyclable
+
+  leaf_v9:
+    "*": green_waste
+
+  trainval_voc:
+    "充电宝": recyclable
+    "包": recyclable
+    "洗护用品": recyclable
+    "塑料玩具": recyclable
+    "塑料器皿": recyclable
+    "塑料衣架": recyclable
+    "玻璃器皿": recyclable
+    "金属器皿": recyclable
+    "快递纸袋": recyclable
+    "插头电线": recyclable
+    "旧衣服": recyclable
+    "易拉罐": recyclable
+    "枕头": recyclable
+    "毛绒玩具": recyclable
+    "鞋": recyclable
+    "砧板": recyclable
+    "纸盒纸箱": recyclable
+    "调料瓶": recyclable
+    "酒瓶": recyclable
+    "金属食品罐": recyclable
+    "金属厨具": recyclable
+    "锅": recyclable
+    "食用油桶": recyclable
+    "饮料瓶": recyclable
+    "书籍纸张": recyclable
+    "垃圾桶": recyclable
+    "塑料厨具": recyclable
+    "毛巾": recyclable
+    "纸袋": recyclable
+    "饮料盒": recyclable
+    "剩饭剩菜": kitchen_waste
+    "大骨头": kitchen_waste
+    "果皮果肉": kitchen_waste
+    "茶叶渣": kitchen_waste
+    "菜帮菜叶": kitchen_waste
+    "蛋壳": kitchen_waste
+    "鱼骨": kitchen_waste
+    "干电池": hazardous
+    "软膏": hazardous
+    "过期药物": hazardous
+    "一次性快餐盒": other_waste
+    "污损塑料": other_waste
+    "烟蒂": other_waste
+    "牙签": other_waste
+    "花盆": other_waste
+    "陶瓷器皿": other_waste
+    "筷子": other_waste
+    "污损用纸": other_waste
+
+  # ===== datas: person→pedestrian, car→obstacle, trafficcone→obstacle, pothole→stain =====
+  datas_v13:
+    person: pedestrian
+    trafficcone: obstacle
+    car: obstacle
+    pothole: stain
+
+  # ===== street_obstacle: 22类→8类, vehicle+road_obstacle → obstacle =====
+  street_obstacle_v13:
+    0: obstacle          # chair
+    1: obstacle          # fence
+    2: obstacle          # garbage bin
+    3: obstacle          # pole
+    4: obstacle          # obstacle
+    5: obstacle          # tree
+    6: obstacle          # plant pot
+    7: obstacle          # stair
+    8: obstacle          # bad road
+    9: pedestrian        # street vendor
+    10: obstacle         # drain
+    11: stain            # pothole
+    12: obstacle         # gate barrier
+    13: stain            # puddle
+    14: obstacle         # motorcycle
+    15: obstacle         # car
+    16: discard          # left turn sign (removed)
+    17: pedestrian       # pedestrian
+    18: obstacle         # roadblock
+    19: obstacle         # door
+    20: discard          # right turn sign (removed)
+    21: discard          # zebra cross sign (removed)
+
+  # ===== 新数据集 =====
+  car_identify:
+    truck: obstacle
+    bus: obstacle
+    SUV: obstacle
+    taxi: obstacle
+    car: obstacle
+
+  pedestrian_coco:
+    person: pedestrian
+
+  cb8c9_water:
+    water: stain
+
+  dataset_resized:
+    cardboard: recyclable
+    glass: recyclable
+    metal: recyclable
+    paper: recyclable
+    plastic: recyclable
+    trash: other_waste
+
+  # puddle datasets
+  puddle_v9:
+    water: stain
+
+  puddle_large_v9:
+    0: stain
+
+  # self_collected: LabelMe label names → 8类
+  self_v13:
+    recyclable: recyclable
+    kitchen_waste: kitchen_waste
+    hazardous: hazardous
+    other_waste: other_waste
+    green_waste: green_waste
+    pedestrian_pet: pedestrian
+    road_obstacle: obstacle
+    stain: stain

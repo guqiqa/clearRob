@@ -1,0 +1,49 @@
+# 模型元信息 — 使用平台据此还原推理环境
+# 来源: 训练程序 runs/v11_final — YOLO11s, mAP50=0.720
+
+model:
+  name: "cleaning_v1.0.0_s"
+  version: "1.0.0"
+  scale: "s"
+  architecture: "YOLO11"
+  framework: "ultralytics 11.x"
+  display_name: "V11清洁检测 (mAP50=0.720)"
+
+  # 输入规格
+  input:
+    width: 640
+    height: 640
+    channels: 3
+    format: "RGB"
+    normalization: "0.0-1.0"
+    mean: [0.0, 0.0, 0.0]
+    std: [1.0, 1.0, 1.0]
+
+  # 输出规格
+  output:
+    num_classes: 8
+    class_names:
+      0: "recyclable"
+      1: "kitchen_waste"
+      2: "hazardous"
+      3: "other_waste"
+      4: "green_waste"
+      5: "road_obstacle"
+      6: "pedestrian_pet"
+      7: "stain"
+    output_format: "xyxy_conf_cls"
+
+  # 推理建议参数
+  inference:
+    conf_threshold: 0.25
+    iou_threshold: 0.45
+    max_det: 300
+
+  # 来源信息
+  source:
+    training_run: "v11_final"
+    base_weights: "yolo11s.pt"
+    epochs: 184
+    optimizer: "AdamW"
+    imgsz: 640
+    batch: 16

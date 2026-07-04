@@ -119,10 +119,10 @@ localization_engine:
 # ---- vision_detector ----
 vision_detector:
   ros__parameters:
-    model_path: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_best.engine"
+    model_path: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_best.onnx"
     model_config: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_config.yaml"
-    model_version: "yolov8"
-    conf_threshold: 0.45
+    model_version: "yolo11"
+    conf_threshold: 0.25
     nms_iou_threshold: 0.45
     input_width: 640
     input_height: 640
@@ -139,6 +139,8 @@ vision_detector:
     simulate_camera: true
     camera_width: 1280
     camera_height: 720
+    use_real_model: true
+    simulate_detections: false
 
 # ---- cleaning_actuator ----
 cleaning_actuator:

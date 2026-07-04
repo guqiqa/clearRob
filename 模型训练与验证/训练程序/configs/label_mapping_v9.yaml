@@ -1,0 +1,191 @@
+# V9 direct label mapping — all → 8 coarse classes
+
+target_classes:
+  0: recyclable
+  1: kitchen_waste
+  2: hazardous
+  3: other_waste
+  4: green_waste
+  5: road_obstacle
+  6: pedestrian_pet
+  7: stain
+
+mappings:
+  taco_v9:
+    "Clear plastic bottle": recyclable
+    "Other plastic bottle": recyclable
+    "Plastic bottle cap": recyclable
+    "Plastic lid": recyclable
+    "Glass bottle": recyclable
+    "Broken glass": recyclable
+    "Glass cup": recyclable
+    "Glass jar": recyclable
+    "Food Can": recyclable
+    Aerosol: recyclable
+    "Drink can": recyclable
+    "Aluminium foil": recyclable
+    "Metal bottle cap": recyclable
+    "Metal lid": recyclable
+    "Pop tab": recyclable
+    "Scrap metal": recyclable
+    "Aluminium blister pack": recyclable
+    "Carded blister pack": recyclable
+    "Other carton": recyclable
+    "Corrugated carton": recyclable
+    "Meal carton": recyclable
+    "Drink carton": recyclable
+    "Egg carton": recyclable
+    "Pizza box": recyclable
+    "Paper cup": recyclable
+    "Magazine paper": recyclable
+    "Normal paper": recyclable
+    "Paper bag": recyclable
+    "Wrapping paper": recyclable
+    "Plastified paper bag": recyclable
+    "Polypropylene bag": recyclable
+    "Disposable food container": recyclable
+    "Foam food container": recyclable
+    "Other plastic container": recyclable
+    Tupperware: recyclable
+    "Spread tub": recyclable
+    "Other plastic": recyclable
+    "Six pack rings": recyclable
+    "Toilet tube": recyclable
+    "Food waste": kitchen_waste
+    Battery: hazardous
+    Cigarette: other_waste
+    Tissues: other_waste
+    "Plastic film": other_waste
+    "Garbage bag": other_waste
+    "Other plastic wrapper": other_waste
+    "Single-use carrier bag": other_waste
+    "Crisp packet": other_waste
+    "Plastic glooves": other_waste
+    "Plastic utensils": other_waste
+    "Squeezable tube": other_waste
+    "Plastic straw": other_waste
+    "Paper straw": other_waste
+    "Styrofoam piece": other_waste
+    "Unlabeled litter": other_waste
+    "Foam cup": other_waste
+    "Disposable plastic cup": other_waste
+    "Other plastic cup": other_waste
+    "Rope & strings": other_waste
+    Shoe: other_waste
+    Furniture: road_obstacle
+    Tire: road_obstacle
+    "Large object": road_obstacle
+    "Construction debris": road_obstacle
+
+  datas_v9:
+    person: pedestrian_pet
+    trafficcone: road_obstacle
+    car: road_obstacle
+    pothole: discard
+
+  street_obstacle_v9:
+    0: discard
+    1: discard
+    2: road_obstacle
+    3: discard
+    4: road_obstacle
+    5: road_obstacle
+    6: road_obstacle
+    7: discard
+    8: discard
+    9: pedestrian_pet
+    10: discard
+    11: discard
+    12: discard
+    13: stain
+    14: road_obstacle
+    15: road_obstacle
+    16: discard
+    17: pedestrian_pet
+    18: road_obstacle
+    19: road_obstacle
+    20: discard
+    21: discard
+
+  puddle_v9:
+    water: stain
+
+  puddle_large_v9:
+    0: stain
+
+  self_v9:
+    recyclable: recyclable
+    kitchen_waste: kitchen_waste
+    hazardous: hazardous
+    other_waste: other_waste
+    green_waste: green_waste
+    road_obstacle: road_obstacle
+    pedestrian_pet: pedestrian_pet
+    stain: stain
+
+  garbages_v9:
+    Recyclable: recyclable
+    Kitchen: kitchen_waste
+    Harmful: hazardous
+    Other: other_waste
+
+  leaf_v9:
+    "*": green_waste
+  # trainval_voc: VOC2007 46细类中国垃圾分类 -> 4粗类目标
+  trainval_voc:
+    "充电宝": recyclable
+    "包": recyclable
+    "洗护用品": recyclable
+    "塑料玩具": recyclable
+    "塑料器皿": recyclable
+    "塑料衣架": recyclable
+    "玻璃器皿": recyclable
+    "金属器皿": recyclable
+    "快递纸袋": recyclable
+    "插头电线": recyclable
+    "旧衣服": recyclable
+    "易拉罐": recyclable
+    "枕头": recyclable
+    "毛绒玩具": recyclable
+    "鞋": recyclable
+    "砧板": recyclable
+    "纸盒纸箱": recyclable
+    "调料瓶": recyclable
+    "酒瓶": recyclable
+    "金属食品罐": recyclable
+    "金属厨具": recyclable
+    "锅": recyclable
+    "食用油桶": recyclable
+    "饮料瓶": recyclable
+    "书籍纸张": recyclable
+    "垃圾桶": recyclable
+    "塑料厨具": recyclable
+    "毛巾": recyclable
+    "纸袋": recyclable
+    "饮料盒": recyclable
+    "剩饭剩菜": kitchen_waste
+    "大骨头": kitchen_waste
+    "果皮果肉": kitchen_waste
+    "茶叶渣": kitchen_waste
+    "菜帮菜叶": kitchen_waste
+    "蛋壳": kitchen_waste
+    "鱼骨": kitchen_waste
+    "干电池": hazardous
+    "软膏": hazardous
+    "过期药物": hazardous
+    "一次性快餐盒": other_waste
+    "污损塑料": other_waste
+    "烟蒂": other_waste
+    "牙签": other_waste
+    "花盆": other_waste
+    "陶瓷器皿": other_waste
+    "筷子": other_waste
+    "污损用纸": other_waste
+
+
+  # garbages_annotated: 手动LabelMe标注, 文件夹名→目标类(直接映射)
+  garbages_annotated_v9:
+    Harmful: hazardous
+    Kitchen: kitchen_waste
+    Other: other_waste
+    Recyclable: recyclable

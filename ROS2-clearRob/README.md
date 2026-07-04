@@ -2,7 +2,7 @@
 
 ## Overview
 
-Based on the [需求文档 V2.3](../项目需求文档/需求文档_V2.3.md), this workspace implements a complete intelligent cleaning robot control system with 9 ROS2 nodes communicating via Topic/Service/Action.
+Based on the [需求文档 V2.4](../项目需求文档/需求文档_V2.4.md), this workspace implements a complete intelligent cleaning robot control system with 9 ROS2 nodes communicating via Topic/Service/Action.
 
 ## Architecture
 

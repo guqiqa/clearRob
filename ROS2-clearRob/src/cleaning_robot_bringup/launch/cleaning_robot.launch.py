@@ -18,13 +18,8 @@ from launch.actions import (
     TimerAction,
 )
 from launch.conditions import IfCondition, UnlessCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import (
-    LoadComposableNodes,
-    Node,
-    PushRosNamespace,
-)
-from launch_ros.descriptions import ComposableNode
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node, PushRosNamespace
 from ament_index_python.packages import get_package_share_directory
 
 
