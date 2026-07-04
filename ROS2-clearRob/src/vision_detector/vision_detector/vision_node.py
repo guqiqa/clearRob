@@ -24,6 +24,7 @@ import numpy as np
 
 import rclpy
 from rclpy.lifecycle import LifecycleNode, LifecycleState, TransitionCallbackReturn
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 from rclpy.timer import Timer
 from rclpy.clock import ClockType
 
@@ -189,17 +190,28 @@ class VisionDetectorNode(LifecycleNode):
         self._load_model()
 
         # Subscriptions
+        # QoS per requirements: camera=KeepLast(5), mode=KeepLast(1)
+        qos_camera = QoSProfile(
+            depth=5,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+        )
+        qos_mode = QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.VOLATILE,
+        )
         self.create_subscription(
             Image,
             "sensor/camera/image_raw",
             self._on_image,
-            10,
+            qos_camera,
         )
         self.create_subscription(
             TaskMode,
             "master/task/mode",
             self._on_mode,
-            10,
+            qos_mode,
         )
 
         # Publishers
@@ -625,6 +637,12 @@ class VisionDetectorNode(LifecycleNode):
         img_height: int,
         now: float,
     ) -> None:
+        # In RETURN mode, garbage classes (0-4) are filtered out, so
+        # garbage_area would be zero and cleanliness would incorrectly
+        # jump to 1.0. Retain the last known cleanliness value instead.
+        if self._mode == MODE_RETURN:
+            return
+
         total_pixels = float(img_width * img_height)
         saturation = self._params["cleanliness_saturation_ratio"]  # 0.3
 
@@ -685,7 +703,12 @@ class VisionDetectorNode(LifecycleNode):
 
         # Build Image message
         ros_img = Image()
-        ros_img.header.stamp = self.get_clock().now().to_msg()
+        # Use camera image timestamp when available for consistency
+        # with the DetectionArray timestamp contract.
+        if self._camera_stamp is not None:
+            ros_img.header.stamp = self._camera_stamp
+        else:
+            ros_img.header.stamp = self.get_clock().now().to_msg()
         ros_img.header.frame_id = "camera_link"
         ros_img.height = 320
         ros_img.width = 640
