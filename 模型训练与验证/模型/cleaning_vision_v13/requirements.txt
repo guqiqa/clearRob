@@ -1,0 +1,13 @@
+# cleaning_vision_v13 — 依赖清单
+# 最低要求: Python 3.8+
+
+# 核心推理
+numpy>=1.21
+onnxruntime>=1.15       # CPU 推理
+# onnxruntime-gpu>=1.15  # GPU 推理 (CUDA 11.8+), 替换上一行
+
+# 图像处理
+opencv-python>=4.5
+
+# 可选: YAML 配置解析 (如需从 config.yaml 加载类别)
+# PyYAML>=6.0

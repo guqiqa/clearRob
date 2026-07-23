@@ -6,7 +6,7 @@ ROS2 Node: vision_detector
 Lifecycle-managed vision module for the cleaning robot system.
 
 Handles:
-  - YOLO-based garbage detection (simulated)
+  - YOLO11s-based garbage/obstacle/pedestrian detection (V13 model, mAP50=0.783)
   - Drivable area inference
   - Cleanliness scoring
   - Mode-aware detection strategy
@@ -58,13 +58,15 @@ CLASS_NAMES = [
     "hazardous",
     "other_waste",
     "green_waste",
-    "road_obstacle",
-    "pedestrian_pet",
+    "pedestrian",
+    "obstacle",
     "stain",
 ]
-# V11 model class order (must match model config):
+# V13 model class order (must match model config):
 #   0=recyclable, 1=kitchen_waste, 2=hazardous, 3=other_waste, 4=green_waste,
-#   5=road_obstacle, 6=pedestrian_pet, 7=stain
+#   5=pedestrian (行人/宠物/骑行者), 6=obstacle (车辆+道路障碍物合并),
+#   7=stain (污渍/积水)
+# V13 changes from V11: road_obstacle+vehicle→obstacle (id=6), pedestrian_pet→pedestrian (id=5)
 
 # Class IDs that count as "garbage" for cleanliness scoring
 GARBAGE_CLASS_IDS = {0, 1, 2, 3, 4}
@@ -278,7 +280,7 @@ class VisionDetectorNode(LifecycleNode):
     # ------------------------------------------------------------------
 
     def _declare_params(self) -> None:
-        self.declare_parameter("model_path", "/opt/cleaning_robot/models/cleaning_v1.0.0_s_best.onnx")
+        self.declare_parameter("model_path", "/opt/cleaning_robot/models/cleaning_v1.3.0_s_best.onnx")
         self.declare_parameter("model_config", "/opt/cleaning_robot/models/cleaning_v1.0.0_s_config.yaml")
         self.declare_parameter("model_version", "yolo11")
         self.declare_parameter("conf_threshold", 0.25)
@@ -574,9 +576,9 @@ class VisionDetectorNode(LifecycleNode):
         else:
             num_detections = random.randint(0, 8)
 
-        # Class distribution weights (matches V11 data distribution)
+        # Class distribution weights (matches V13 data distribution)
         # 0=recyclable 1=kitchen_waste 2=hazardous 3=other_waste 4=green_waste
-        # 5=road_obstacle 6=pedestrian_pet 7=stain
+        # 5=pedestrian 6=obstacle 7=stain
         class_weights = [0.15, 0.10, 0.05, 0.30, 0.20, 0.10, 0.05, 0.05]
         class_ids = random.choices(range(8), weights=class_weights, k=num_detections)
 
@@ -613,7 +615,7 @@ class VisionDetectorNode(LifecycleNode):
 
         CRUISE: all 8 classes
         CLEAN:  class_id 0-4 (garbage) + 7 (stain)
-        RETURN: class_id 5-6 (road_obstacle + pedestrian_pet)
+        RETURN: class_id 5-6 (pedestrian + obstacle)
         """
         if self._mode == MODE_CRUISE:
             return detections

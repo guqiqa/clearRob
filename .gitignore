@@ -13,6 +13,9 @@ __pycache__/
 # Training runs & outputs
 runs/
 
+# Video output files (large)
+video_inference/output/
+
 # Large datasets
 date/
 模型训练与验证/数据集/

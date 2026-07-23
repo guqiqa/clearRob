@@ -119,8 +119,8 @@ localization_engine:
 # ---- vision_detector ----
 vision_detector:
   ros__parameters:
-    model_path: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_best.onnx"
-    model_config: "/opt/cleaning_robot/models/cleaning_v1.0.0_s_config.yaml"
+    model_path: "/opt/cleaning_robot/models/cleaning_v1.3.0_s_best.onnx"
+    model_config: "/opt/cleaning_robot/models/cleaning_v1.3.0_s_config.yaml"
     model_version: "yolo11"
     conf_threshold: 0.25
     nms_iou_threshold: 0.45

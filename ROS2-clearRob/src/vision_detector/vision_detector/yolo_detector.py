@@ -17,6 +17,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 _logger = logging.getLogger("yolo_detector")
@@ -40,7 +41,6 @@ def _letterbox(
     dh = (h - new_h) / 2
 
     if (w0, h0) != (new_w, new_h):
-        import cv2
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
 
     top = int(round(dh - 0.1))
@@ -149,7 +149,7 @@ class YOLODetector:
         self._input_size = input_size
         self._class_names = class_names or [
             "recyclable", "kitchen_waste", "hazardous", "other_waste",
-            "green_waste", "road_obstacle", "pedestrian_pet", "stain",
+            "green_waste", "pedestrian", "obstacle", "stain",
         ]
         self._nc = len(self._class_names)
 

@@ -1,0 +1,16 @@
+path: d:/AIview/模型训练与验证/数据集/processed_v13
+train: train/images
+val: val/images
+test: test/images
+
+names:
+  0: recyclable
+  1: kitchen_waste
+  2: hazardous
+  3: other_waste
+  4: green_waste
+  5: pedestrian
+  6: obstacle
+  7: stain
+
+nc: 8
