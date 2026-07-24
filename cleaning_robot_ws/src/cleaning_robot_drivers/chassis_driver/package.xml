@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>chassis_driver</name>
+  <version>0.1.0</version>
+  <description>CAN bus motor controller for OID FOC brushless motors: speed control, odometry, heartbeat.</description>
+  <maintainer email="aiview@example.com">AIview Dev</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cleaning_robot_common</depend>
+  <depend>tf2_ros</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

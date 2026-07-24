@@ -25,6 +25,9 @@ build/
 install/
 log/
 
+# Offline packages (large .deb files)
+phase1_deps/
+
 # IDE
 .vscode/
 .idea/

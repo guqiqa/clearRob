@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>master_bridge</name>
+  <version>0.1.0</version>
+  <description>Phase 1 master bridge: STANDBY/MANUAL state machine, remote→chassis cmd_vel bridge.</description>
+  <maintainer email="aiview@example.com">AIview Dev</maintainer>
+  <license>Apache-2.0</license>
+  <depend>rclpy</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>cleaning_robot_common</depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

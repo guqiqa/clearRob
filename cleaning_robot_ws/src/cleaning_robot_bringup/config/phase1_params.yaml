@@ -1,0 +1,86 @@
+# Default parameters for Phase 1 — chassis control
+# Load with: ros2 launch cleaning_robot_bringup phase1_chassis.launch.py
+
+# ---- chassis_driver ----
+chassis_driver:
+  ros__parameters:
+    # CAN
+    can_interface: "can0"
+
+    # Kinematics (confirmed from hardware measurement)
+    pole_pairs: 10             # 20-pole motor = 10 pole pairs
+    gear_ratio: 5.2            # 5.2:1 reduction gearbox
+    wheel_radius: 0.08         # 160mm wheel diameter
+    track_width: 0.53          # 530mm track width
+
+    # Control limits (calibrated from candump data)
+    max_velocity: 0.5          # m/s (estimated, needs field calibration)
+    max_current: 500           # ×10mA = 5.0A max
+    current_deadzone: 10       # ×10mA = 0.1A dead zone
+
+    # Timing
+    query_interval_ms: 20      # Speed query period
+    heartbeat_interval_ms: 10  # CAN heartbeat period
+
+    # Safety
+    cmd_vel_timeout_ms: 500    # cmd_vel timeout → emergency stop
+    query_timeout_ms: 100      # CAN query response timeout
+    motor_temp_warn_c: 80.0    # Motor overheat warning
+    motor_temp_cutoff_c: 100.0 # Motor thermal cutoff
+
+    # Simulation
+    simulate: false            # Set true for PC testing without CAN hardware
+
+# ---- imu_driver ----
+imu_driver:
+  ros__parameters:
+    device: "/dev/qmi8658_imu"
+    frame_id: "imu_link"
+    publish_rate: 200
+
+    # Calibration coefficients (from vendor QMI8658 datasheet)
+    accel_bias_x: 0.320
+    accel_bias_y: 0.027
+    accel_bias_z: 0.802
+    accel_scale_z: 0.991
+    gyro_bias_x: 0.0265
+    gyro_bias_y: -0.0135
+    gyro_bias_z: 0.0132
+
+    simulate: false
+
+# ---- rtk_driver ----
+rtk_driver:
+  ros__parameters:
+    device: "/dev/ttyS2"
+    baudrate: 460800
+    frame_id: "gps_link"
+
+    simulate: false
+    sim_lat: 31.2304
+    sim_lon: 121.4737
+
+# ---- remote_driver ----
+remote_driver:
+  ros__parameters:
+    device: "/dev/ttyS1"
+    baudrate: 115200
+    frame_id: "rc_link"
+
+    sbus_min: 172
+    sbus_center: 992
+    sbus_max: 1811
+    axis_deadzone: 0.05
+
+    simulate: false
+
+# ---- master_bridge ----
+master_bridge:
+  ros__parameters:
+    max_linear_velocity: 0.5
+    max_angular_velocity: 2.0
+    axis_steering: 0           # Joy.axes[0] = steering
+    axis_throttle: 1           # Joy.axes[1] = throttle
+    btn_start_stop: 0          # Joy.buttons[0] = START/STOP toggle
+    btn_estop: 2               # Joy.buttons[2] = emergency stop
+    estop_debounce_ms: 200
