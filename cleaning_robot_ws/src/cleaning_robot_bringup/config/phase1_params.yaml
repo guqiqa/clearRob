@@ -10,8 +10,8 @@ chassis_driver:
     # Kinematics (confirmed from hardware measurement)
     pole_pairs: 10             # 20-pole motor = 10 pole pairs
     gear_ratio: 5.2            # 5.2:1 reduction gearbox
-    wheel_radius: 0.08         # 160mm wheel diameter
-    track_width: 0.53          # 530mm track width
+    wheel_radius: 0.10         # 200mm wheel diameter (vendor WheelPID V2 config)
+    track_width: 0.45          # 450mm track width (vendor WheelPID V2 config)
 
     # Control limits (calibrated from candump data)
     max_velocity: 0.5          # m/s (estimated, needs field calibration)
@@ -27,6 +27,34 @@ chassis_driver:
     query_timeout_ms: 100      # CAN query response timeout
     motor_temp_warn_c: 80.0    # Motor overheat warning
     motor_temp_cutoff_c: 100.0 # Motor thermal cutoff
+
+    # Wheel speed-loop control (WheelPID V2 port, current mode — validated)
+    # "current" = software PI + startup ramp on OID current control (0x01).
+    # This is the mode the vendor WheelPID V2 actually runs (verified on the
+    # bus).  "speed" (driver 0x02 closed-loop) is NOT supported by this
+    # driver firmware and must not be used.
+    wheel_control_mode: "current"
+    speed_accel_rpm_s: 10      # target ramp while accelerating (wheel RPM/s)
+    speed_decel_rpm_s: 30      # target ramp while decelerating (wheel RPM/s)
+    wheel_max_current: 35      # ×10mA = 0.35A, software PI run limit
+    wheel_speed_kp: 0.60       # software PI Kp (current mode only)
+    wheel_speed_ki: 0.05       # software PI Ki (current mode only)
+    wheel_feedforward_current: 24    # ×10mA feed-forward at full target (current mode)
+    wheel_integral_max_current: 10   # ×10mA integral clamp (current mode)
+    wheel_start_initial_current: 55  # ×10mA startup current ramp (current mode)
+    wheel_start_step_current: 2      # ×10mA per startup step
+    wheel_start_step_ms: 200
+    wheel_start_max_current: 70      # ×10mA
+    wheel_start_threshold_rpm: 2     # wheel RPM = "started"
+    wheel_start_confirm_samples: 1
+    wheel_stall_threshold_rpm: 1
+    wheel_stall_confirm_samples: 3
+    wheel_start_timeout_ms: 7000
+    wheel_overspeed_rpm: 120         # latches stop if exceeded
+    speed_feedback_timeout_ms: 1000  # feedback older than this → stop wheel
+    control_interval_ms: 50          # control loop period
+    motor_dirs: [-1, -1, 1, 1]       # FL, RL, FR, RR physical direction (calibrated: +x cmd → car must go forward)
+    motor_gains: [1.082, 1.131, 1.089, 1.000]  # FL, RL, FR, RR per-motor speed gain (calibrated 2026-08-03 iter2)
 
     # Simulation
     simulate: false            # Set true for PC testing without CAN hardware
@@ -67,10 +95,12 @@ remote_driver:
     baudrate: 115200
     frame_id: "rc_link"
 
-    sbus_min: 172
-    sbus_center: 992
-    sbus_max: 1811
+    # C7mini 8-channel, travel 1000-2000
     axis_deadzone: 0.05
+    ch_steering: 0       # CH1: right stick L/R
+    ch_throttle: 2       # CH3: left stick F/B
+    ch_btn_start: 4      # CH5: SWA (3-pos 200/1000/1800, START/STOP) — calibrated 2026-08-03
+    ch_btn_estop: 5      # CH6: SWB (2-pos 1000/200, ESTOP) — calibrated 2026-08-03
 
     simulate: false
 
@@ -81,6 +111,6 @@ master_bridge:
     max_angular_velocity: 2.0
     axis_steering: 0           # Joy.axes[0] = steering
     axis_throttle: 1           # Joy.axes[1] = throttle
-    btn_start_stop: 0          # Joy.buttons[0] = START/STOP toggle
-    btn_estop: 2               # Joy.buttons[2] = emergency stop
+    btn_start_stop: 0          # Joy.buttons[0] = SWA (CH6)
+    btn_estop: 2               # Joy.buttons[2] = SWB (CH7)
     estop_debounce_ms: 200

@@ -15,6 +15,7 @@ Usage:
 """
 
 import os
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction, LogInfo, TimerAction
 from launch.conditions import IfCondition, UnlessCondition
@@ -23,6 +24,9 @@ from launch_ros.actions import Node
 
 
 def generate_launch_description():
+    pkg_share = get_package_share_directory("cleaning_robot_bringup")
+    params_file = os.path.join(pkg_share, "config", "phase1_params.yaml")
+
     # ---- Launch arguments ----
     sim_arg = DeclareLaunchArgument(
         "simulate", default_value="false",
@@ -43,7 +47,7 @@ def generate_launch_description():
         name="imu_driver",
         namespace=ns,
         output="screen",
-        parameters=[{"simulate": sim_val}],
+        parameters=[params_file, {"simulate": sim_val}],
     )
 
     remote_node = Node(
@@ -52,7 +56,7 @@ def generate_launch_description():
         name="remote_driver",
         namespace=ns,
         output="screen",
-        parameters=[{"simulate": sim_val}],
+        parameters=[params_file, {"simulate": sim_val}],
     )
 
     chassis_node = Node(
@@ -61,7 +65,11 @@ def generate_launch_description():
         name="chassis_driver",
         namespace=ns,
         output="screen",
-        parameters=[{"simulate": sim_val}],
+        parameters=[
+            params_file,
+            {"simulate": sim_val},
+            {"left_motor_invert": True},
+        ],
     )
 
     bridge_node = Node(
@@ -70,6 +78,7 @@ def generate_launch_description():
         name="master_bridge",
         namespace=ns,
         output="screen",
+        parameters=[params_file],
     )
 
     # RTK — skip in sim mode (no GPS signal indoors)
@@ -80,7 +89,7 @@ def generate_launch_description():
         namespace=ns,
         output="screen",
         condition=IfCondition(sim_val),
-        parameters=[{"simulate": True}],
+        parameters=[params_file, {"simulate": True}],
     )
     rtk_node_real = Node(
         package="rtk_driver",
@@ -89,7 +98,7 @@ def generate_launch_description():
         namespace=ns,
         output="screen",
         condition=UnlessCondition(sim_val),
-        parameters=[{"simulate": False}],
+        parameters=[params_file, {"simulate": False}],
     )
 
     return LaunchDescription([

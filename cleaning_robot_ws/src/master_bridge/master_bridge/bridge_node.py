@@ -18,8 +18,8 @@ from std_msgs.msg import String
 from cleaning_robot_common.config import (
     TOPIC_CMD_VEL, TOPIC_JOY, TOPIC_MASTER_STATE,
     MAX_LINEAR_VELOCITY, MAX_ANGULAR_VELOCITY,
-    RC_AXIS_STEERING, RC_AXIS_THROTTLE,
-    RC_BTN_START_STOP, RC_BTN_ESTOP,
+    RC_CH_STEERING, RC_CH_THROTTLE,
+    RC_CH_SWA, RC_CH_SWB,
     ESTOP_DEBOUNCE_MS,
 )
 
@@ -35,10 +35,10 @@ class MasterBridgeNode(Node):
 
         self.declare_parameter("max_linear_velocity", MAX_LINEAR_VELOCITY)
         self.declare_parameter("max_angular_velocity", MAX_ANGULAR_VELOCITY)
-        self.declare_parameter("axis_steering", RC_AXIS_STEERING)
-        self.declare_parameter("axis_throttle", RC_AXIS_THROTTLE)
-        self.declare_parameter("btn_start_stop", RC_BTN_START_STOP)
-        self.declare_parameter("btn_estop", RC_BTN_ESTOP)
+        self.declare_parameter("axis_steering", 0)    # Joy.axes[0] = steering
+        self.declare_parameter("axis_throttle", 1)    # Joy.axes[1] = throttle (NOT SBUS ch)
+        self.declare_parameter("btn_start_stop", 0)  # joy.buttons[0] = SWA
+        self.declare_parameter("btn_estop", 2)       # joy.buttons[2] = SWB
         self.declare_parameter("estop_debounce_ms", ESTOP_DEBOUNCE_MS)
 
         g = lambda n: self.get_parameter(n).get_parameter_value()
@@ -52,9 +52,11 @@ class MasterBridgeNode(Node):
 
         # State
         self._state = STATE_STANDBY
-        self._prev_start_btn = 0
         self._last_estop_time = 0.0
         self._estop_active = False
+        self._swa_btn = 0          # debounced SWA state
+        self._swa_last = 0
+        self._swa_changed = 0.0    # timestamp when SWA raw value changed
         self._start_time = time.time()
 
         # ROS interfaces
@@ -88,14 +90,17 @@ class MasterBridgeNode(Node):
         if self._estop_active:
             return
 
-        # State toggle
-        if btn_start != self._prev_start_btn and btn_start:
-            if self._state == STATE_STANDBY:
+        # SWA debounce: raw button must be stable for 0.5s before state change
+        if btn_start != self._swa_last:
+            self._swa_last = btn_start
+            self._swa_changed = now
+        elif now - self._swa_changed > 0.5 and btn_start != self._swa_btn:
+            self._swa_btn = btn_start
+            if btn_start:
                 self._state = STATE_MANUAL
             else:
                 self._state = STATE_STANDBY
-            self.get_logger().info(f"→ {self._state}")
-        self._prev_start_btn = btn_start
+            self.get_logger().info(f"→ {self._state}" if btn_start else f"→ STANDBY")
 
         # Motion
         v = throttle * self._max_v if self._state == STATE_MANUAL else 0.0

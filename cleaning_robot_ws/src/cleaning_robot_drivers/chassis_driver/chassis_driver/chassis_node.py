@@ -2,8 +2,15 @@
 """
 chassis_driver/chassis_node.py — CAN bus motor controller (ROS2 node).
 
-Uses cleaning_robot_common for all constants, kinematics, and CAN protocol.
-This file contains only the ROS2 lifecycle (subs/pubs/timers) and runtime state.
+Control logic lives in cleaning_robot_common.wheel_speed_loop (dependency-free
+so it can be simulated/tested). This node handles only the ROS2 lifecycle,
+CAN I/O, and scheduling:
+
+  speed   — driver internal closed-loop (OID 0x02), software slew-rate ramp
+  current — software PI + feed-forward on OID current control (0x01)
+
+Speed feedback is read big-endian (matching the driver) — the old
+little-endian parse produced garbage RPM / odometry.
 
 Subscribes:  /cmd_vel (geometry_msgs/Twist)
 Publishes:   /odom (nav_msgs/Odometry), /chassis/status, tf
@@ -29,25 +36,25 @@ except ImportError:
     HAS_CAN = False
 
 from cleaning_robot_common.config import (
-    # CAN
     DRIVE_IDS, LEFT_IDS, RIGHT_IDS,
-    CAN_CMD_HEARTBEAT,
-    # Kinematics
     MAX_LINEAR_VELOCITY, MAX_MOTOR_CURRENT, CURRENT_DEADZONE,
+    MOTOR_POLE_PAIRS, MOTOR_GEAR_RATIO, WHEEL_RADIUS_M, TRACK_WIDTH_M,
     CAN_QUERY_INTERVAL_MS, CAN_HEARTBEAT_INTERVAL_MS,
     CMD_VEL_TIMEOUT_MS, CAN_QUERY_TIMEOUT_MS,
     ODOM_PUBLISH_HZ, MOTOR_TEMP_WARN_C, MOTOR_TEMP_CUTOFF_C,
-    # Topics & frames
+    WHEEL_SPEED_PARAMS,
     TOPIC_CMD_VEL, TOPIC_ODOM, TOPIC_CHASSIS_STATUS,
     FRAME_ODOM, FRAME_BASE_LINK,
 )
 from cleaning_robot_common.kinematics import (
-    diff_decompose, erpm_to_ms, ms_to_current,
-    compute_odom_velocity, integrate_odom, yaw_to_quaternion,
+    diff_decompose, integrate_odom, compute_odom_velocity, yaw_to_quaternion,
 )
 from cleaning_robot_common.can_protocol import (
-    make_current_frame, make_query_frame, parse_query_erpm,
+    make_current_frame, make_query_frame, make_speed_frame,
+    make_set_accel_frame, make_set_decel_frame, make_set_max_current_frame,
+    parse_query_erpm,
 )
+from cleaning_robot_common.wheel_speed_loop import WheelSpeedController
 
 
 class ChassisDriverNode(Node):
@@ -59,25 +66,33 @@ class ChassisDriverNode(Node):
         self._declare_params()
         self._read_params()
 
-        # ---- Runtime state ----
+        # ---- cmd_vel state ----
         self._v_target = 0.0
         self._w_target = 0.0
         self._last_cmd_time: Optional[float] = None
 
-        # Odometry state
+        # ---- Odometry state ----
         self._x = 0.0
         self._y = 0.0
         self._theta = 0.0
         self._odom_last_time: Optional[float] = None
 
-        # Motor state
-        self._motor_speeds = {cid: 0.0 for cid in DRIVE_IDS}
+        # Motor / feedback state
+        self._motor_speeds = {cid: 0.0 for cid in DRIVE_IDS}   # m/s (odom feed)
+        self._measured_rpm = {cid: 0.0 for cid in DRIVE_IDS}   # physical wheel RPM
+        self._feedback_time: dict = {}                          # monotonic ts per cid
 
         # CAN state
         self._can_bus = None
         self._can_lock = threading.Lock()
         self._running = False
         self._can_thread: Optional[threading.Thread] = None
+        self._query_index = 0
+
+        # Scheduler bookkeeping
+        self._last_hb = time.monotonic()
+        self._last_query = time.monotonic()
+        self._last_ctrl = time.monotonic()
 
         # ---- ROS interfaces ----
         qos_s = QoSProfile(depth=5, reliability=QoSReliabilityPolicy.RELIABLE,
@@ -93,13 +108,18 @@ class ChassisDriverNode(Node):
         from tf2_ros import TransformBroadcaster
         self._tf_broadcaster = TransformBroadcaster(self)
 
+        # ---- Wheel speed-loop controller (pure logic) ----
+        self._controller = WheelSpeedController(self._build_controller_params())
+
         # ---- Start ----
         if self._simulate:
             self.get_logger().info("[SIM] chassis_driver running")
             self.create_timer(1.0 / ODOM_PUBLISH_HZ, self._tick_sim)
         else:
             self._start_can()
-            self.create_timer(self._query_interval, self._query_speeds)
+            self._configure_driver()
+            # 10 ms scheduler tick — heartbeat / query / control time-sliced
+            self.create_timer(0.01, self._main_tick)
             self.create_timer(1.0 / ODOM_PUBLISH_HZ, self._publish_odom)
 
     # ---- Parameters ----
@@ -116,6 +136,38 @@ class ChassisDriverNode(Node):
         self.declare_parameter("motor_temp_warn_c", MOTOR_TEMP_WARN_C)
         self.declare_parameter("motor_temp_cutoff_c", MOTOR_TEMP_CUTOFF_C)
         self.declare_parameter("simulate", False)
+        # 左侧电机反装 — 仅用于无PI的旧开环电流路径
+        self.declare_parameter("left_motor_invert", True)
+
+        # Kinematics
+        self.declare_parameter("pole_pairs", MOTOR_POLE_PAIRS)
+        self.declare_parameter("gear_ratio", MOTOR_GEAR_RATIO)
+        self.declare_parameter("wheel_radius", WHEEL_RADIUS_M)
+        self.declare_parameter("track_width", TRACK_WIDTH_M)
+
+        # Wheel speed-loop (WheelPID V2 port)
+        self.declare_parameter("wheel_control_mode", WHEEL_SPEED_PARAMS["wheel_control_mode"])
+        self.declare_parameter("speed_accel_rpm_s", WHEEL_SPEED_PARAMS["speed_accel_rpm_s"])
+        self.declare_parameter("speed_decel_rpm_s", WHEEL_SPEED_PARAMS["speed_decel_rpm_s"])
+        self.declare_parameter("wheel_max_current", WHEEL_SPEED_PARAMS["wheel_max_current"])
+        self.declare_parameter("wheel_speed_kp", WHEEL_SPEED_PARAMS["wheel_speed_kp"])
+        self.declare_parameter("wheel_speed_ki", WHEEL_SPEED_PARAMS["wheel_speed_ki"])
+        self.declare_parameter("wheel_feedforward_current", WHEEL_SPEED_PARAMS["wheel_feedforward_current"])
+        self.declare_parameter("wheel_integral_max_current", WHEEL_SPEED_PARAMS["wheel_integral_max_current"])
+        self.declare_parameter("wheel_start_initial_current", WHEEL_SPEED_PARAMS["wheel_start_initial_current"])
+        self.declare_parameter("wheel_start_step_current", WHEEL_SPEED_PARAMS["wheel_start_step_current"])
+        self.declare_parameter("wheel_start_step_ms", WHEEL_SPEED_PARAMS["wheel_start_step_ms"])
+        self.declare_parameter("wheel_start_max_current", WHEEL_SPEED_PARAMS["wheel_start_max_current"])
+        self.declare_parameter("wheel_start_threshold_rpm", WHEEL_SPEED_PARAMS["wheel_start_threshold_rpm"])
+        self.declare_parameter("wheel_start_confirm_samples", WHEEL_SPEED_PARAMS["wheel_start_confirm_samples"])
+        self.declare_parameter("wheel_stall_threshold_rpm", WHEEL_SPEED_PARAMS["wheel_stall_threshold_rpm"])
+        self.declare_parameter("wheel_stall_confirm_samples", WHEEL_SPEED_PARAMS["wheel_stall_confirm_samples"])
+        self.declare_parameter("wheel_start_timeout_ms", WHEEL_SPEED_PARAMS["wheel_start_timeout_ms"])
+        self.declare_parameter("wheel_overspeed_rpm", WHEEL_SPEED_PARAMS["wheel_overspeed_rpm"])
+        self.declare_parameter("speed_feedback_timeout_ms", WHEEL_SPEED_PARAMS["speed_feedback_timeout_ms"])
+        self.declare_parameter("control_interval_ms", WHEEL_SPEED_PARAMS["control_interval_ms"])
+        self.declare_parameter("motor_dirs", [-1, -1, 1, 1])
+        self.declare_parameter("motor_gains", [1.0, 1.0, 1.0, 1.0])
 
     def _read_params(self) -> None:
         g = lambda n: self.get_parameter(n).get_parameter_value()
@@ -130,18 +182,63 @@ class ChassisDriverNode(Node):
         self._temp_warn       = g("motor_temp_warn_c").double_value
         self._temp_cutoff     = g("motor_temp_cutoff_c").double_value
         self._simulate        = g("simulate").bool_value
+        self._left_invert     = g("left_motor_invert").bool_value
+
+        self._pole_pairs   = g("pole_pairs").integer_value
+        self._gear_ratio   = g("gear_ratio").double_value
+        self._wheel_radius = g("wheel_radius").double_value
+        self._track_width  = g("track_width").double_value
+
+        # cache the ROS-side kinematics so odometry uses the same values
+        self._motor_dirs = {}
+        dir_array = g("motor_dirs").integer_array_value
+        order = [2, 1, 4, 3]
+        if len(dir_array) != len(order):
+            self.get_logger().error(f"motor_dirs must have {len(order)} entries, got {len(dir_array)}")
+            dir_array = [-1, -1, 1, 1]
+        self._motor_dirs = {order[i]: dir_array[i] for i in range(len(order))}
+        self._motor_gains = {}
+        gain_array = g("motor_gains").double_array_value if hasattr(g("motor_gains"), "double_array_value") else None
+        if gain_array is None:
+            gain_array = g("motor_gains").integer_array_value if hasattr(g("motor_gains"), "integer_array_value") else [1.0]*4
+        if len(gain_array) != len(order):
+            self.get_logger().error(f"motor_gains must have {len(order)} entries, got {len(gain_array)}")
+            gain_array = [1.0]*4
+        self._motor_gains = {order[i]: float(gain_array[i]) for i in range(len(order))}
+
+    def _build_controller_params(self) -> dict:
+        g = lambda n: self.get_parameter(n).value  # native Python type
+        keys = [
+            "wheel_control_mode", "speed_accel_rpm_s", "speed_decel_rpm_s",
+            "wheel_max_current", "wheel_speed_kp", "wheel_speed_ki",
+            "wheel_feedforward_current", "wheel_integral_max_current",
+            "wheel_start_initial_current", "wheel_start_step_current",
+            "wheel_start_step_ms", "wheel_start_max_current",
+            "wheel_start_threshold_rpm", "wheel_start_confirm_samples",
+            "wheel_stall_threshold_rpm", "wheel_stall_confirm_samples",
+            "wheel_start_timeout_ms", "wheel_overspeed_rpm",
+            "speed_feedback_timeout_ms", "control_interval_ms",
+        ]
+        params = {k: g(k) for k in keys}
+        params["pole_pairs"] = self._pole_pairs
+        params["gear_ratio"] = self._gear_ratio
+        params["wheel_radius"] = self._wheel_radius
+        params["track_width"] = self._track_width
+        params["motor_dirs"] = self._motor_dirs
+        params["motor_gains"] = self._motor_gains
+        return params
 
     # ---- cmd_vel subscriber ----
 
     def _cb_cmd_vel(self, msg) -> None:
         self._v_target = msg.linear.x
         self._w_target = msg.angular.z
-        self._last_cmd_time = time.time()
+        self._last_cmd_time = time.monotonic()
 
     @property
     def _cmd_timed_out(self) -> bool:
         return (self._last_cmd_time is None or
-                (time.time() - self._last_cmd_time) > self._cmd_timeout)
+                (time.monotonic() - self._last_cmd_time) > self._cmd_timeout)
 
     # ---- CAN bus ----
 
@@ -160,27 +257,8 @@ class ChassisDriverNode(Node):
             self.create_timer(1.0 / ODOM_PUBLISH_HZ, self._tick_sim)
             return
         self._running = True
-        self._can_thread = threading.Thread(target=self._can_loop, daemon=True)
+        self._can_thread = threading.Thread(target=self._can_read_loop, daemon=True)
         self._can_thread.start()
-
-    def _can_loop(self) -> None:
-        self.get_logger().info("CAN control loop running")
-        cycle = 0
-        while self._running and rclpy.ok():
-            timeout = self._cmd_timed_out
-            for cid in DRIVE_IDS:
-                if timeout:
-                    self._send_frame(*make_current_frame(cid, 0))
-                elif cycle % 2 == 0:
-                    v_left, v_right = diff_decompose(self._v_target, self._w_target)
-                    v_wheel = v_left if cid in LEFT_IDS else v_right
-                    cur = ms_to_current(v_wheel, self._max_velocity,
-                                        self._max_current, self._current_dz)
-                    self._send_frame(*make_current_frame(cid, cur))
-                else:
-                    self._send_frame(cid, bytes([CAN_CMD_HEARTBEAT]))
-                time.sleep(self._heartbeat_intv / len(DRIVE_IDS))
-            cycle += 1
 
     def _send_frame(self, can_id: int, data: bytes) -> None:
         if self._can_bus is None:
@@ -192,30 +270,113 @@ class ChassisDriverNode(Node):
         except can.CanError as e:
             self.get_logger().warn(f"CAN send {can_id}: {e}")
 
-    def _query_speeds(self) -> None:
-        if self._can_bus is None:
-            return
-        for cid in DRIVE_IDS:
-            self._send_frame(*make_query_frame(cid))
+    def _can_read_loop(self) -> None:
+        """Blocking receiver: parse speed-query responses → update feedback."""
+        while self._running and rclpy.ok():
             try:
-                resp = self._can_bus.recv(timeout=self._query_timeout)
-                erpm = parse_query_erpm(resp.data) if resp else None
-                if erpm is not None:
-                    self._motor_speeds[cid] = erpm_to_ms(erpm)
-            except Exception:
-                pass
+                resp = self._can_bus.recv(timeout=0.05)
+            except can.CanError:
+                continue
+            if resp is None:
+                continue
+            erpm = parse_query_erpm(resp.data)
+            if erpm is None:
+                continue
+            cid = resp.arbitration_id
+            if cid not in DRIVE_IDS:
+                continue
+            rpm = self._controller.erpm_to_wheel_rpm(cid, erpm)
+            self._measured_rpm[cid] = rpm
+            self._feedback_time[cid] = time.monotonic()
+            self._motor_speeds[cid] = self._controller.wheel_rpm_to_mps(rpm)
+
+    def _configure_driver(self) -> None:
+        """Send driver-side setup once at startup (speed mode)."""
+        if self._can_bus is None or self._controller.mode != "speed":
+            return
+        accel = int(round(self._controller.accel_rpm_s *
+                          self._pole_pairs * self._gear_ratio))
+        decel = int(round(self._controller.decel_rpm_s *
+                          self._pole_pairs * self._gear_ratio))
+        for cid in DRIVE_IDS:
+            self._send_frame(*make_set_max_current_frame(cid, self._controller.wheel_max_current))
+            self._send_frame(*make_set_accel_frame(cid, accel))
+            self._send_frame(*make_set_decel_frame(cid, decel))
+            self._send_frame(*make_speed_frame(cid, 0))
+        self.get_logger().info(
+            f"speed mode driver config: max_cur={self._controller.wheel_max_current}x10mA "
+            f"accel={accel} decel={decel} erpm/s")
+
+    # ---- Scheduler ----
+
+    def _main_tick(self) -> None:
+        now = time.monotonic()
+        if now - self._last_hb >= self._heartbeat_intv:
+            for cid in DRIVE_IDS:
+                self._send_frame(cid, bytes([0x00]))
+            self._last_hb = now
+        if now - self._last_query >= self._query_interval:
+            cid = DRIVE_IDS[self._query_index]
+            self._query_index = (self._query_index + 1) % len(DRIVE_IDS)
+            self._send_frame(*make_query_frame(cid))
+            self._last_query = now
+        if now - self._last_ctrl >= self._controller.control_interval_s:
+            self._control_tick()
+            self._last_ctrl = now
+
+    # ---- Control ----
+
+    def _targets_from_cmd(self):
+        v_left, v_right = diff_decompose(self._v_target, self._w_target,
+                                         self._track_width)
+        # Targets are PHYSICAL wheel RPM (positive = physical forward). The
+        # controller converts to motor polarity at its output using motor_dirs
+        # (right motors are reverse-mounted: forward = negative current).
+        # Do NOT multiply by dir here — that would double-flip the differential
+        # term and reverse steering direction.
+        return {cid: (self._controller.mps_to_wheel_rpm(v_left) if cid in LEFT_IDS
+                      else self._controller.mps_to_wheel_rpm(v_right))
+                for cid in DRIVE_IDS}
+
+    def _feedback_fresh(self, cid: int) -> bool:
+        t = self._feedback_time.get(cid)
+        return t is not None and (time.monotonic() - t) <= self._controller.feedback_timeout_s
+
+    def _control_tick(self) -> None:
+        if self._cmd_timed_out:
+            for cid, kind, value in self._controller.stop_all():
+                self._dispatch(cid, kind, value)
+            if self._controller.safety_latched and not self._controller.safety_reported:
+                self.get_logger().error(
+                    f"WHEEL SAFETY STOP: {self._controller.safety_reason}")
+                self._controller.safety_reported = True
+            return
+        targets = self._targets_from_cmd()
+        fresh = {cid: self._feedback_fresh(cid) for cid in DRIVE_IDS}
+        for cid, kind, value in self._controller.step(targets, self._measured_rpm, fresh):
+            self._dispatch(cid, kind, value)
+        if self._controller.safety_latched and not self._controller.safety_reported:
+            self.get_logger().error(
+                f"WHEEL SAFETY STOP: {self._controller.safety_reason}")
+            self._controller.safety_reported = True
+
+    def _dispatch(self, cid: int, kind: str, value: int) -> None:
+        if kind == "speed":
+            self._send_frame(*make_speed_frame(cid, value))
+        elif kind == "current":
+            self._send_frame(*make_current_frame(cid, value))
 
     # ---- Odometry ----
 
     def _publish_odom(self) -> None:
-        now = time.time()
+        now = time.monotonic()
         dt = (now - self._odom_last_time) if self._odom_last_time else 0.02
         self._odom_last_time = now
 
         if self._simulate:
             v, w = self._v_target, self._w_target
         else:
-            v, w = compute_odom_velocity(self._motor_speeds)
+            v, w = compute_odom_velocity(self._motor_speeds, self._track_width)
 
         self._x, self._y, self._theta = integrate_odom(
             self._x, self._y, self._theta, v, w, dt)
@@ -256,6 +417,8 @@ class ChassisDriverNode(Node):
 
     def destroy_node(self) -> None:
         self._running = False
+        for cid, kind, value in self._controller.stop_all():
+            self._dispatch(cid, kind, value)
         if self._can_thread:
             self._can_thread.join(timeout=1.0)
         if self._can_bus:

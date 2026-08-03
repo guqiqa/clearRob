@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+import sys; sys.path.insert(0,'/root/cleaning_robot_ws/src/cleaning_robot_common'); sys.path.insert(0,'/root/cleaning_robot_ws/src')
+import rclpy; rclpy.init(args=sys.argv)
+from imu_driver.imu_node import main; main()

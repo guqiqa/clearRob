@@ -14,12 +14,13 @@ from .config import (
 )
 
 
-def diff_decompose(v_linear: float, w_angular: float) -> tuple:
+def diff_decompose(v_linear: float, w_angular: float,
+                   track_width: float = TRACK_WIDTH_M) -> tuple:
     """cmd_vel (v, ω) → left/right wheel linear velocities (m/s).
 
     Returns (v_left, v_right).
     """
-    half = TRACK_WIDTH_M / 2.0
+    half = track_width / 2.0
     v_left  = v_linear - w_angular * half
     v_right = v_linear + w_angular * half
     return v_left, v_right
@@ -44,7 +45,8 @@ def ms_to_current(target_vel: float, max_vel: float = 0.5,
     return 0 if abs(current) < deadzone else current
 
 
-def compute_odom_velocity(motor_speeds: dict) -> tuple:
+def compute_odom_velocity(motor_speeds: dict,
+                          track_width: float = TRACK_WIDTH_M) -> tuple:
     """4-wheel motor speeds (m/s) → (v_linear, w_angular) for odometry.
 
     motor_speeds: {can_id: speed_m_s} for CAN IDs 1-4.
@@ -58,7 +60,7 @@ def compute_odom_velocity(motor_speeds: dict) -> tuple:
                motor_speeds.get(CAN_ID_RIGHT_REAR, 0.0)) / 2.0
 
     v = (v_right + v_left) / 2.0
-    w = (v_right - v_left) / TRACK_WIDTH_M
+    w = (v_right - v_left) / track_width
     return v, w
 
 
