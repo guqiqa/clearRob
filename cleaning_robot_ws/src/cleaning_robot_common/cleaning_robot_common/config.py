@@ -205,6 +205,9 @@ CHASSIS_CORE_DEFAULTS = {
     "motor_dirs": [-1, -1, 1, 1],   # flipped 2026-08-04 — colleague's [1,1,-1,-1] tested REVERSED; matches Python-port MOTOR_DIRS
     "mower_id": 5,
 
+    # Direction sign (formal config.xml §2 Motion_Forward_RPM_Sign)
+    "motion_forward_rpm_sign": -1,
+
     # Base speed
     "run_rpm": 100,
     "rotate_rpm": 50,
@@ -228,7 +231,7 @@ CHASSIS_CORE_DEFAULTS = {
     "speed_accel_rpm_s": 10,
     "speed_decel_rpm_s": 30,
 
-    # Wheel speed-loop PI (current mode)
+    # Wheel speed-loop PI (current mode — RC/manual)
     "wheel_control_mode": "current",
     "wheel_speed_kp": 0.60,
     "wheel_speed_ki": 0.05,
@@ -248,6 +251,33 @@ CHASSIS_CORE_DEFAULTS = {
     "wheel_start_timeout_ms": 7000,
     "wheel_overspeed_rpm": 120,
     "speed_feedback_timeout_ms": 1000,
+
+    # ---- Post-start anti-stutter (formal config.xml ROS2 section) ----
+    "wheel_post_start_hold_ms": 500,
+    "wheel_post_start_current": 48,
+    "wheel_min_run_current": 42,
+
+    # ---- ROS2 autonomous-mode speed loop (formal config.xml §13) ----
+    "ros2_enable": True,
+    "ros2_cmd_timeout_ms": 300,
+    "ros2_publish_tf": True,
+    "ros2_odom_frame": "odom",
+    "ros2_base_frame": "base_link",
+    "ros2_wheel_control_mode": "current",
+    "ros2_wheel_speed_kp": 0.80,
+    "ros2_wheel_speed_ki": 0.010,
+    "ros2_wheel_feedforward_current": 30,
+    "ros2_wheel_max_current": 130,
+    "ros2_wheel_integral_max_current": 10,
+    "ros2_wheel_start_initial_current": 130,
+    "ros2_wheel_start_max_current": 170,
+
+    # ---- Velocity / acceleration limits (formal config.xml §8) ----
+    "max_velocity_mps": 0.0,
+    "max_angular_radps": 0.0,
+    "max_accel_mps2": 0.40,
+    "max_decel_mps2": 0.60,
+    "max_angular_accel_radps2": 1.00,
 
     # Mower
     "cut_current": 0,

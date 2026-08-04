@@ -125,6 +125,32 @@ struct Config {
     bool lateral_hold_enable{false};
     double lateral_kp_deg_per_m{0.0};
     double lateral_max_heading_deg{0.0};
+    // Post-start anti-stutter (formal config.xml ROS2 section)
+    int wheel_post_start_hold_ms{500};
+    int wheel_post_start_current{48};
+    int wheel_min_run_current{42};
+    // Unified direction sign
+    int motion_forward_rpm_sign{-1};
+    // ROS2 autonomous profile (formal config.xml §13)
+    bool ros2_enable{true};
+    int ros2_cmd_timeout_ms{300};
+    bool ros2_publish_tf{true};
+    std::string ros2_odom_frame{"odom"};
+    std::string ros2_base_frame{"base_link"};
+    std::string ros2_wheel_control_mode{"current"};
+    double ros2_wheel_speed_kp{0.80};
+    double ros2_wheel_speed_ki{0.010};
+    int ros2_wheel_feedforward_current{30};
+    int ros2_wheel_max_current{130};
+    int ros2_wheel_integral_max_current{10};
+    int ros2_wheel_start_initial_current{130};
+    int ros2_wheel_start_max_current{170};
+    // Velocity / accel limits (formal config.xml §8, 0=unlimited)
+    double max_velocity_mps{0.0};
+    double max_angular_radps{0.0};
+    double max_accel_mps2{0.40};
+    double max_decel_mps2{0.60};
+    double max_angular_accel_radps2{1.00};
 };
 
 // A parameter value coming from ROS2 YAML.  All four types are supported so
@@ -273,6 +299,7 @@ private:
     std::array<int, 4> wheel_start_elapsed_ms_{};
     std::array<int, 4> wheel_start_confirm_count_{};
     std::array<int, 4> wheel_stall_count_{};
+    std::array<int, 4> wheel_post_start_hold_ms_{};
     std::array<uint64_t, 4> feedback_generation_{};
     std::array<uint64_t, 4> processed_feedback_generation_{};
     bool wheel_safety_latched_{false};

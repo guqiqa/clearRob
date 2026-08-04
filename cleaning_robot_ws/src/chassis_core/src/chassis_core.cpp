@@ -147,6 +147,30 @@ Config configFromDict(const std::unordered_map<std::string, ParamValue>& params)
     c.lateral_kp_deg_per_m      = getNum(params, "lateral_kp_deg_per_m", c.lateral_kp_deg_per_m);
     c.lateral_max_heading_deg   = getNum(params, "lateral_max_heading_deg", c.lateral_max_heading_deg);
 
+    // Post-start anti-stutter + direction sign (formal config.xml additions)
+    c.wheel_post_start_hold_ms  = getNum(params, "wheel_post_start_hold_ms", c.wheel_post_start_hold_ms);
+    c.wheel_post_start_current  = getNum(params, "wheel_post_start_current", c.wheel_post_start_current);
+    c.wheel_min_run_current     = getNum(params, "wheel_min_run_current", c.wheel_min_run_current);
+    c.motion_forward_rpm_sign   = getNum(params, "motion_forward_rpm_sign", c.motion_forward_rpm_sign);
+    c.ros2_enable               = getBool(params, "ros2_enable", c.ros2_enable);
+    c.ros2_cmd_timeout_ms       = getNum(params, "ros2_cmd_timeout_ms", c.ros2_cmd_timeout_ms);
+    c.ros2_publish_tf           = getBool(params, "ros2_publish_tf", c.ros2_publish_tf);
+    c.ros2_odom_frame           = getStr(params, "ros2_odom_frame", c.ros2_odom_frame);
+    c.ros2_base_frame           = getStr(params, "ros2_base_frame", c.ros2_base_frame);
+    c.ros2_wheel_control_mode   = getStr(params, "ros2_wheel_control_mode", c.ros2_wheel_control_mode);
+    c.ros2_wheel_speed_kp       = getNum(params, "ros2_wheel_speed_kp", c.ros2_wheel_speed_kp);
+    c.ros2_wheel_speed_ki       = getNum(params, "ros2_wheel_speed_ki", c.ros2_wheel_speed_ki);
+    c.ros2_wheel_feedforward_current = getNum(params, "ros2_wheel_feedforward_current", c.ros2_wheel_feedforward_current);
+    c.ros2_wheel_max_current    = getNum(params, "ros2_wheel_max_current", c.ros2_wheel_max_current);
+    c.ros2_wheel_integral_max_current = getNum(params, "ros2_wheel_integral_max_current", c.ros2_wheel_integral_max_current);
+    c.ros2_wheel_start_initial_current = getNum(params, "ros2_wheel_start_initial_current", c.ros2_wheel_start_initial_current);
+    c.ros2_wheel_start_max_current = getNum(params, "ros2_wheel_start_max_current", c.ros2_wheel_start_max_current);
+    c.max_velocity_mps          = getNum(params, "max_velocity_mps", c.max_velocity_mps);
+    c.max_angular_radps         = getNum(params, "max_angular_radps", c.max_angular_radps);
+    c.max_accel_mps2            = getNum(params, "max_accel_mps2", c.max_accel_mps2);
+    c.max_decel_mps2            = getNum(params, "max_decel_mps2", c.max_decel_mps2);
+    c.max_angular_accel_radps2  = getNum(params, "max_angular_accel_radps2", c.max_angular_accel_radps2);
+
     auto ids = getArr(params, "motor_ids");
     if (ids.size() == 4) {
         for (int i = 0; i < 4; ++i) c.motor_ids[i] = static_cast<uint16_t>(ids[i]);
@@ -658,8 +682,23 @@ void Controller::logStraightness(double throttle, double steering, bool heading_
 
 void Controller::applyWheelSpeedControl(const std::array<double, 4>& desired_rpm) {
     const double dt = static_cast<double>(c_.control_ms) / 1000.0;
+    const bool ros2_profile = false;   // RC/intent mode; set true for autonomous nav
+
+    // Profile selection (RC vs ROS2 — formal config.xml dual-profile system)
+    const double wheel_speed_kp       = ros2_profile ? c_.ros2_wheel_speed_kp : c_.wheel_speed_kp;
+    const double wheel_speed_ki       = ros2_profile ? c_.ros2_wheel_speed_ki : c_.wheel_speed_ki;
+    const int wheel_feedforward_current = ros2_profile ? c_.ros2_wheel_feedforward_current : c_.wheel_feedforward_current;
+    const int wheel_max_current       = ros2_profile ? c_.ros2_wheel_max_current : c_.wheel_max_current;
+    const int wheel_integral_max_current = ros2_profile ? c_.ros2_wheel_integral_max_current : c_.wheel_integral_max_current;
+    const int wheel_start_initial_current = ros2_profile ? c_.ros2_wheel_start_initial_current : c_.wheel_start_initial_current;
+    const int wheel_start_max_current = ros2_profile ? c_.ros2_wheel_start_max_current : c_.wheel_start_max_current;
+    const std::string& wheel_control_mode = ros2_profile ? c_.ros2_wheel_control_mode : c_.wheel_control_mode;
+    const int wheel_min_run_current   = ros2_profile ? c_.wheel_min_run_current : 0;
+    const int wheel_post_start_hold_ms_val = ros2_profile ? c_.wheel_post_start_hold_ms : 0;
+    const int wheel_post_start_current = ros2_profile ? c_.wheel_post_start_current : 0;
+
     const bool stopped = std::all_of(desired_rpm.begin(), desired_rpm.end(),
-                                     [](double value) { return std::abs(value) < 0.5; });
+                                     [](double v) { return std::abs(v) < 0.5; });
     if (stopped) {
         wheel_safety_latched_ = false;
         wheel_safety_reason_.clear();
@@ -667,18 +706,37 @@ void Controller::applyWheelSpeedControl(const std::array<double, 4>& desired_rpm
         wheel_start_elapsed_ms_.fill(0);
         wheel_start_confirm_count_.fill(0);
         wheel_stall_count_.fill(0);
+        wheel_post_start_hold_ms_.fill(0);
     }
-    if (!stopped && std::any_of(feedback_valid_.begin(), feedback_valid_.end(),
-                                [](bool valid) { return !valid; })) {
+
+    const bool any_feedback_invalid = std::any_of(feedback_valid_.begin(), feedback_valid_.end(),
+                                                  [](bool v) { return !v; });
+    if (!stopped && any_feedback_invalid) {
+        if (ros2_profile) {
+            // ROS2 nodes may receive commands while feedback is still warming up.
+            // Don't latch a permanent safety stop — just command zero until valid.
+            ramped_target_rpm_.fill(0.0);
+            wheel_integral_.fill(0.0);
+            wheel_current_10ma_.fill(0);
+            wheel_started_.fill(false);
+            wheel_start_elapsed_ms_.fill(0);
+            wheel_start_confirm_count_.fill(0);
+            wheel_stall_count_.fill(0);
+            wheel_post_start_hold_ms_.fill(0);
+            for (auto id : c_.motor_ids) can_.current(id, 0);
+            return;
+        }
         wheel_safety_latched_ = true;
         wheel_safety_reason_ = "speed feedback lost";
     }
+
     for (std::size_t i = 0; i < 4; ++i) {
         if (feedback_valid_[i] && std::abs(measured_rpm_[i]) > c_.wheel_overspeed_rpm) {
             wheel_safety_latched_ = true;
             wheel_safety_reason_ = "wheel overspeed";
         }
     }
+
     if (wheel_safety_latched_) {
         ramped_target_rpm_.fill(0.0);
         wheel_integral_.fill(0.0);
@@ -686,58 +744,70 @@ void Controller::applyWheelSpeedControl(const std::array<double, 4>& desired_rpm
         for (auto id : c_.motor_ids) can_.current(id, 0);
         if (!wheel_safety_reported_) {
             std::cout << "WHEEL SAFETY STOP: "
-                      << (wheel_safety_reason_.empty() ? "startup timeout"
-                                                     : wheel_safety_reason_)
+                      << (wheel_safety_reason_.empty() ? "startup timeout" : wheel_safety_reason_)
                       << "; return throttle to neutral" << std::endl;
             wheel_safety_reported_ = true;
         }
         return;
     }
     wheel_safety_reported_ = false;
-    if (c_.wheel_control_mode == "speed") {
+
+    // ---- speed mode ----
+    if (wheel_control_mode == "speed") {
         for (std::size_t i = 0; i < 4; ++i) {
             if (std::abs(desired_rpm[i]) < 0.5) {
-                ramped_target_rpm_[i] = 0.0;
-                wheel_integral_[i] = 0.0;
-                wheel_current_10ma_[i] = 0;
-                wheel_started_[i] = false;
-                can_.speed(c_.motor_ids[i], 0);
-                continue;
+                ramped_target_rpm_[i] = 0.0; wheel_integral_[i] = 0.0;
+                wheel_current_10ma_[i] = 0; wheel_started_[i] = false;
+                can_.speed(c_.motor_ids[i], 0); continue;
             }
             if (!feedback_valid_[i]) {
-                ramped_target_rpm_[i] = 0.0;
-                wheel_integral_[i] = 0.0;
-                wheel_current_10ma_[i] = 0;
-                can_.speed(c_.motor_ids[i], 0);
-                continue;
+                ramped_target_rpm_[i] = 0.0; wheel_integral_[i] = 0.0;
+                wheel_current_10ma_[i] = 0; can_.speed(c_.motor_ids[i], 0); continue;
             }
-            const bool accelerating = std::abs(desired_rpm[i]) > std::abs(ramped_target_rpm_[i]);
-            const double slew = (accelerating ? c_.speed_accel_rpm_s : c_.speed_decel_rpm_s) * dt;
+            const bool accel = std::abs(desired_rpm[i]) > std::abs(ramped_target_rpm_[i]);
+            double acc_r = c_.speed_accel_rpm_s, dec_r = c_.speed_decel_rpm_s;
+            if (ros2_profile) { acc_r = std::max(acc_r, 60.0); dec_r = std::max(dec_r, 90.0); }
+            const double slew = (accel ? acc_r : dec_r) * dt;
             ramped_target_rpm_[i] += std::clamp(desired_rpm[i] - ramped_target_rpm_[i], -slew, slew);
             const int32_t erpm = static_cast<int32_t>(std::lround(
                 ramped_target_rpm_[i] * c_.pole_pairs * c_.gear_ratio * c_.motor_dirs[i]));
-            wheel_current_10ma_[i] = 0;
-            wheel_started_[i] = true;
+            wheel_current_10ma_[i] = 0; wheel_started_[i] = true;
             can_.speed(c_.motor_ids[i], erpm);
         }
         return;
     }
+
+    // ---- current mode (software PI) ----
     bool startup_failed = false;
     for (std::size_t i = 0; i < 4; ++i) {
         if (std::abs(desired_rpm[i]) < 0.5) {
             ramped_target_rpm_[i] = 0.0; wheel_integral_[i] = 0.0;
             wheel_current_10ma_[i] = 0; wheel_started_[i] = false;
-            wheel_start_elapsed_ms_[i] = 0; can_.current(c_.motor_ids[i], 0); continue;
+            wheel_start_elapsed_ms_[i] = 0; wheel_post_start_hold_ms_[i] = 0;
+            can_.current(c_.motor_ids[i], 0); continue;
         }
         if (!feedback_valid_[i]) {
             ramped_target_rpm_[i] = 0.0; wheel_integral_[i] = 0.0;
             wheel_current_10ma_[i] = 0; can_.current(c_.motor_ids[i], 0); continue;
         }
+
         const bool accelerating = std::abs(desired_rpm[i]) > std::abs(ramped_target_rpm_[i]);
         const double slew = (accelerating ? c_.speed_accel_rpm_s : c_.speed_decel_rpm_s) * dt;
         ramped_target_rpm_[i] += std::clamp(desired_rpm[i] - ramped_target_rpm_[i], -slew, slew);
-        const double start_command_rpm = std::min(
-            10.0, std::max(2.0, std::abs(desired_rpm[i]) * 0.67));
+
+        // Dynamic start-release: require a meaningful fraction of desired RPM before
+        // leaving startup current.  Prevents a tiny encoder twitch from switching to
+        // the weak PI current → "start—sag—stall—restart" stutter.
+        const double start_command_rpm = std::clamp(std::abs(desired_rpm[i]) * 0.67, 2.0, 10.0);
+        double start_release_rpm = std::max(
+            static_cast<double>(c_.wheel_start_threshold_rpm),
+            std::clamp(std::abs(desired_rpm[i]) * 0.45, 5.0, 15.0));
+        if (ros2_profile) {
+            start_release_rpm = std::max(
+                static_cast<double>(c_.wheel_start_threshold_rpm),
+                std::clamp(std::abs(desired_rpm[i]) * 0.15, 3.0, 5.0));
+        }
+
         const bool new_feedback = feedback_generation_[i] != processed_feedback_generation_[i];
         if (new_feedback) {
             processed_feedback_generation_[i] = feedback_generation_[i];
@@ -751,52 +821,99 @@ void Controller::applyWheelSpeedControl(const std::array<double, 4>& desired_rpm
                     wheel_start_elapsed_ms_[i] = 0;
                     wheel_start_confirm_count_[i] = 0;
                     wheel_stall_count_[i] = 0;
+                    wheel_post_start_hold_ms_[i] = 0;
                     wheel_integral_[i] = 0.0;
                 }
             } else if (wheel_start_elapsed_ms_[i] > 0) {
-                if (std::abs(measured_rpm_[i]) >= c_.wheel_start_threshold_rpm)
+                if (std::abs(measured_rpm_[i]) >= start_release_rpm)
                     ++wheel_start_confirm_count_[i];
                 else
                     wheel_start_confirm_count_[i] = 0;
                 if (wheel_start_confirm_count_[i] >= c_.wheel_start_confirm_samples) {
                     wheel_started_[i] = true;
+                    // Jump the ramp target to the command target at handoff.
+                    // The startup current (55–70 mA) far exceeds the PI run limit
+                    // (35 mA), so the wheel is already near target speed.  If the
+                    // ramp is still crawling from zero, the PI sees a huge negative
+                    // error → slams reverse current → stall → stutter.  Jumping
+                    // avoids that gap.
+                    ramped_target_rpm_[i] = desired_rpm[i];
                     wheel_integral_[i] = 0.0;
                     wheel_stall_count_[i] = 0;
+                    wheel_post_start_hold_ms_[i] = wheel_post_start_hold_ms_val;
                 }
             }
         }
+
         if (!wheel_started_[i]) {
             if (std::abs(desired_rpm[i]) < start_command_rpm) {
                 processed_feedback_generation_[i] = feedback_generation_[i];
                 wheel_start_elapsed_ms_[i] = 0;
                 wheel_start_confirm_count_[i] = 0;
                 wheel_current_10ma_[i] = 0;
-                can_.current(c_.motor_ids[i], 0);
-                continue;
+                can_.current(c_.motor_ids[i], 0); continue;
             }
             wheel_start_elapsed_ms_[i] += c_.control_ms;
             if (wheel_start_elapsed_ms_[i] > c_.wheel_start_timeout_ms) startup_failed = true;
             const int steps = wheel_start_elapsed_ms_[i] / c_.wheel_start_step_ms;
-            const int start_current = std::min(c_.wheel_start_max_current,
-                c_.wheel_start_initial_current + steps * c_.wheel_start_step_current);
+            const int start_current = std::min(wheel_start_max_current,
+                wheel_start_initial_current + steps * c_.wheel_start_step_current);
             wheel_current_10ma_[i] = desired_rpm[i] > 0 ? start_current : -start_current;
             can_.current(c_.motor_ids[i], wheel_current_10ma_[i] * c_.motor_dirs[i]);
             continue;
         }
+
+        // ---- PI + feed-forward ----
         const double error = ramped_target_rpm_[i] - measured_rpm_[i];
         double next_integral = wheel_integral_[i] + error * dt;
-        if (c_.wheel_speed_ki > 0.0) {
-            const double lim = static_cast<double>(c_.wheel_integral_max_current) / c_.wheel_speed_ki;
+        if (wheel_speed_ki > 0.0) {
+            const double lim = static_cast<double>(wheel_integral_max_current) / wheel_speed_ki;
             next_integral = std::clamp(next_integral, -lim, lim);
         } else next_integral = 0.0;
+
         const double desired_magnitude = std::max(1.0, std::abs(desired_rpm[i]));
         const double feedforward_scale = std::clamp(
             std::abs(ramped_target_rpm_[i]) / desired_magnitude, 0.0, 1.0);
-        const double feedforward = c_.wheel_feedforward_current * feedforward_scale;
+        const bool same_direction = measured_rpm_[i] * ramped_target_rpm_[i] > 0.0;
+        const bool overspeed_same_direction = same_direction &&
+            std::abs(measured_rpm_[i]) > std::abs(ramped_target_rpm_[i]);
+        double feedforward = wheel_feedforward_current * feedforward_scale;
+        // ROS2: when wheel is already faster than ramp, stop adding drive FF.
+        // Prevents push-through overspeed → stick-slip.
+        if (ros2_profile && overspeed_same_direction) feedforward = 0.0;
         const double ff = ramped_target_rpm_[i] >= 0 ? feedforward : -feedforward;
-        const double raw = ff + c_.wheel_speed_kp * error + c_.wheel_speed_ki * next_integral;
-        const double limited = std::clamp(raw, -static_cast<double>(c_.wheel_max_current), static_cast<double>(c_.wheel_max_current));
-        if (std::abs(raw) <= c_.wheel_max_current) wheel_integral_[i] = next_integral;
+
+        const double raw = ff + wheel_speed_kp * error + wheel_speed_ki * next_integral;
+        double limited = std::clamp(raw, -static_cast<double>(wheel_max_current),
+                                    static_cast<double>(wheel_max_current));
+        if (std::abs(raw) <= wheel_max_current) wheel_integral_[i] = next_integral;
+
+        // ROS2 anti-brake: don't actively brake with opposite-sign current when the
+        // wheel is already faster than target.  Braking drops it into static friction
+        // → startup current kicks again → mid-run stick-slip.  Coasting is smoother.
+        if (ros2_profile && overspeed_same_direction && limited * ramped_target_rpm_[i] < 0.0) {
+            limited = 0.0;
+            wheel_integral_[i] = 0.0;
+        }
+
+        // Post-start minimum current: hold a floor current after startup so the PI
+        // doesn't sag below the stall threshold.  Decrements the hold timer each tick.
+        int min_current = wheel_min_run_current;
+        if (wheel_post_start_hold_ms_[i] > 0) {
+            min_current = std::max(min_current, wheel_post_start_current);
+            wheel_post_start_hold_ms_[i] = std::max(0, wheel_post_start_hold_ms_[i] - c_.control_ms);
+        }
+        // Only apply anti-stall minimum when wheel is slower than target.
+        // If the wheel is already overshooting, a minimum drive current would
+        // keep accelerating it and could trip wheel overspeed.
+        const bool wheel_too_slow = desired_rpm[i] * error > 0.0;
+        if (min_current > 0 && wheel_too_slow && std::abs(desired_rpm[i]) >= 0.5 &&
+            std::abs(limited) < min_current) {
+            const double sign_ref = std::abs(ramped_target_rpm_[i]) >= 0.5
+                                        ? ramped_target_rpm_[i] : desired_rpm[i];
+            limited = sign_ref >= 0.0 ? static_cast<double>(min_current) : -static_cast<double>(min_current);
+        }
+
         wheel_current_10ma_[i] = static_cast<int>(std::lround(limited));
         can_.current(c_.motor_ids[i], wheel_current_10ma_[i] * c_.motor_dirs[i]);
     }

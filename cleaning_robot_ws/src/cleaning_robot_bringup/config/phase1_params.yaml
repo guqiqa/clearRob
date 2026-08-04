@@ -34,6 +34,14 @@ chassis_driver:
       motor_dirs: [-1, -1, 1, 1]   # flipped 2026-08-04: colleague's [1,1,-1,-1] tested REVERSED on ground → all 4 flipped to match Python-port calibration
       mower_id: 5
 
+      # Direction sign (formal config.xml §2 Motion_Forward_RPM_Sign)
+      # Unified RPM target sign: -1 flips all wheel targets so physical forward
+      # is negative RPM in the control logic.  This parameter plus motor_dirs
+      # completely determines the wheel→chassis mapping.  The formal version
+      # uses original dirs [1,1,-1,-1] + Sign=-1; our flipped dirs [-1,-1,1,1]
+      # already embed this sign, so this parameter is informational for now.
+      motion_forward_rpm_sign: -1
+
       # Base speed
       run_rpm: 100
       rotate_rpm: 50
@@ -57,7 +65,9 @@ chassis_driver:
       speed_accel_rpm_s: 10
       speed_decel_rpm_s: 30
 
-      # Wheel speed-loop PI (current mode — driver firmware has no 0x02 speed mode)
+      # ==================================================================
+      # Wheel speed-loop — RC/manual mode (formal config.xml §4 / ours)
+      # ==================================================================
       wheel_control_mode: "current"
       wheel_speed_kp: 0.60
       wheel_speed_ki: 0.05
@@ -77,6 +87,49 @@ chassis_driver:
       wheel_start_timeout_ms: 7000
       wheel_overspeed_rpm: 120
       speed_feedback_timeout_ms: 1000
+
+      # ---- Post-start anti-stutter (formal config.xml §4, ROS2 section) ----
+      # After the startup ramp engages the PI loop, the PI's first tick sees a
+      # huge negative error (ramp≪measured) and slams reverse current → the
+      # wheel speed dips below the stall threshold → re-start cycle → stutter.
+      # The post-start hold keeps a minimum run current for `wheel_post_start_hold_ms`
+      # after the startup ramp confirms rotation, bridging the startup→PI gap.
+      # A dedicated `wheel_post_start_current` (higher than the PI limit) holds
+      # the wheel spinning while the ramp catches up.
+      wheel_post_start_hold_ms: 500      # hold after startup confirmation [formal: ROS2 500ms]
+      wheel_post_start_current: 48       # current during post-start hold, ×10mA
+      wheel_min_run_current: 42          # minimum running current, ×10mA  [formal: ROS2 42]
+
+      # ==================================================================
+      # ROS2 autonomous-mode speed loop (formal config.xml §13)
+      # Separate, larger-current params for ROS2 autonomous control vs RC.
+      # Kp higher (0.80 vs 0.60), max current 130 (1.3A) vs 35 (0.35A) —
+      # autonomous nav needs more torque authority than human remote control.
+      # ==================================================================
+      ros2_enable: true
+      ros2_cmd_timeout_ms: 300
+      ros2_publish_tf: true
+      ros2_odom_frame: "odom"
+      ros2_base_frame: "base_link"
+      ros2_wheel_control_mode: "current"
+      ros2_wheel_speed_kp: 0.80
+      ros2_wheel_speed_ki: 0.010
+      ros2_wheel_feedforward_current: 30
+      ros2_wheel_max_current: 130
+      ros2_wheel_integral_max_current: 10
+      ros2_wheel_start_initial_current: 130
+      ros2_wheel_start_max_current: 170
+
+      # ==================================================================
+      # Velocity / acceleration limits (formal config.xml §8)
+      # Caps linear/angular velocity and accel for ROS2 autonomous mode.
+      # 0 = unlimited.
+      # ==================================================================
+      max_velocity_mps: 0.0              # 0=unlimited
+      max_angular_radps: 0.0             # 0=unlimited
+      max_accel_mps2: 0.40
+      max_decel_mps2: 0.60
+      max_angular_accel_radps2: 1.00
 
       # Mower (Phase 2)
       cut_current: 0
