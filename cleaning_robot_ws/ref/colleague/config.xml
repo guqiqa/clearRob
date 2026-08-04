@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<DeviceConfig version="1.0">
+<SBus_Port>/dev/ttyS1</SBus_Port><Can_Port>can0</Can_Port>
+<Run_RPM>100</Run_RPM><Rotate_RPM>50</Rotate_RPM>
+<Rotate_In_Place_Enable>1</Rotate_In_Place_Enable><Rotate_Direction_Sign>1</Rotate_Direction_Sign><Rotate_Factory_Current_Control_Enable>1</Rotate_Factory_Current_Control_Enable>
+<Speed_Accel_RPM_s>10</Speed_Accel_RPM_s><Speed_Decel_RPM_s>30</Speed_Decel_RPM_s>
+<Wheel_Speed_Kp>0.60</Wheel_Speed_Kp><Wheel_Speed_Ki>0.05</Wheel_Speed_Ki><Wheel_Feedforward_Current>24</Wheel_Feedforward_Current>
+<Wheel_Max_Current>35</Wheel_Max_Current><Rotate_Max_Current>500</Rotate_Max_Current><Wheel_Integral_Max_Current>10</Wheel_Integral_Max_Current><Wheel_Start_Initial_Current>55</Wheel_Start_Initial_Current><Wheel_Start_Step_Current>2</Wheel_Start_Step_Current><Wheel_Start_Step_ms>200</Wheel_Start_Step_ms><Wheel_Start_Max_Current>70</Wheel_Start_Max_Current><Wheel_Start_Threshold_RPM>2</Wheel_Start_Threshold_RPM><Wheel_Start_Confirm_Samples>1</Wheel_Start_Confirm_Samples><Wheel_Stall_Threshold_RPM>1</Wheel_Stall_Threshold_RPM><Wheel_Stall_Confirm_Samples>3</Wheel_Stall_Confirm_Samples><Wheel_Start_Timeout_ms>7000</Wheel_Start_Timeout_ms><Wheel_Overspeed_RPM>120</Wheel_Overspeed_RPM>
+<Speed_Feedback_Timeout_ms>1000</Speed_Feedback_Timeout_ms>
+<Cut_Speed>0</Cut_Speed><Turn_Inner_Ratio>-0.20</Turn_Inner_Ratio>
+<Low_Threshold>800</Low_Threshold><High_Threshold>1199</High_Threshold>
+<Throttle_Channel>3</Throttle_Channel><Steering_Channel>4</Steering_Channel><Mower_Channel>2</Mower_Channel>
+<Failsafe_ms>300</Failsafe_ms><Heartbeat_ms>200</Heartbeat_ms><Control_ms>50</Control_ms>
+<Speed_Query_ms>50</Speed_Query_ms><Speed_Log_ms>250</Speed_Log_ms><Pole_Pairs>10</Pole_Pairs><Gear_Ratio>5.2</Gear_Ratio>
+<Wheel_Radius_m>0.10</Wheel_Radius_m><Track_Width_m>0.45</Track_Width_m>
+<Odom_Log_Enable>1</Odom_Log_Enable><Odom_Log_Path>odometry.csv</Odom_Log_Path>
+<IMU_Heading_Enable>1</IMU_Heading_Enable><IMU_Device>/sys/bus/iio/devices/iio:device0</IMU_Device>
+<IMU_Axis>z</IMU_Axis><IMU_Yaw_Sign>-1</IMU_Yaw_Sign><IMU_Calibrate_ms>3000</IMU_Calibrate_ms><IMU_Deadband_dps>0.30</IMU_Deadband_dps>
+<Heading_Kp>1.2</Heading_Kp><Heading_Ki>0.0</Heading_Ki><Heading_Kd>0.2</Heading_Kd>
+<Heading_Integral_Max_Correction>0</Heading_Integral_Max_Correction><Heading_Max_Correction>5</Heading_Max_Correction>
+<Heading_Correction_Sign>-1</Heading_Correction_Sign><Heading_Forward_Trim>0</Heading_Forward_Trim><Heading_Reverse_Trim>0</Heading_Reverse_Trim>
+<Direction_Change_Hold_Enable>1</Direction_Change_Hold_Enable><Direction_Change_Stop_RPM>5</Direction_Change_Stop_RPM><Direction_Change_Hold_Timeout_ms>1500</Direction_Change_Hold_Timeout_ms>
+<Direction_Change_Post_Hold_ms>1000</Direction_Change_Post_Hold_ms><Direction_Change_Post_Max_Diff_RPM>4</Direction_Change_Post_Max_Diff_RPM>
+<FL_ID>2</FL_ID><RL_ID>1</RL_ID><FR_ID>4</FR_ID><RR_ID>3</RR_ID><Mower_ID>5</Mower_ID>
+<FL_Dir>1</FL_Dir><RL_Dir>1</RL_Dir><FR_Dir>-1</FR_Dir><RR_Dir>-1</RR_Dir><ShowLog>1</ShowLog>
+</DeviceConfig>

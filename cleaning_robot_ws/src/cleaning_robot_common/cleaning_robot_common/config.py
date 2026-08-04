@@ -101,7 +101,7 @@ IMU_PUBLISH_HZ            = 200  # IMU data rate
 WHEEL_CONTROL_MODE = "current"       # "current" | "speed"
 
 # Driver closed-loop (speed mode — NOT supported by current driver firmware)
-SPEED_ACCEL_RPM_S  = 10              # target ramp: wheel RPM/s while accelerating
+SPEED_ACCEL_RPM_S  = 30              # target ramp: wheel RPM/s while accelerating
 SPEED_DECEL_RPM_S  = 30              # target ramp: wheel RPM/s while decelerating
 WHEEL_MAX_CURRENT  = 35              # ×10mA = 0.35A, software PI run limit
 
@@ -111,7 +111,13 @@ WHEEL_SPEED_KI           = 0.05      # integral gain
 WHEEL_FEEDFORWARD_CURRENT = 24       # ×10mA feed-forward at full target speed
 WHEEL_INTEGRAL_MAX_CURRENT = 10      # ×10mA integral clamp
 
-# Startup current ramp (current mode) — breaks static friction
+# Startup current ramp (current mode) — breaks static friction.
+# EXACT vendor config.xml values.  Tuning away from these (tried 60/4/80 + a
+# 4rpm threshold, 2026-08-03) made startup stutter WORSE: the big start
+# current + late handoff to PI made the PI slam on reverse current.  Startup
+# stutter is fixed in wheel_speed_loop by catching ramped_target up to the
+# measured wheel speed at the start→PI handoff (error≈0 → no reverse brake),
+# NOT by tuning the start current magnitudes.
 WHEEL_START_INITIAL_CURRENT = 55     # ×10mA
 WHEEL_START_STEP_CURRENT   = 2       # ×10mA added per step
 WHEEL_START_STEP_MS        = 200
@@ -174,6 +180,138 @@ WHEEL_SPEED_PARAMS = {
 }
 
 # =========================================================================
+# Chassis Core (C++ pybind11 engine) — full parameter dictionary.
+#
+# Keys match chassis_core::configFromDict in src/chassis_core.  Values are the
+# colleague's validated config.xml on this robot, transcribed 2026-08-04.
+# The chassis_driver Python shell reads these as ROS2 params and passes the
+# dict to ChassisCore(config_dict).  Change params here OR in
+# phase1_params.yaml — the YAML is loaded last and wins.
+#
+# NOTE on motor_dirs: the colleague's program drives this robot with
+# FL=1 RL=1 FR=-1 RR=-1 (right-side motors reverse-mounted).  The intent
+# semantics follow the colleague's convention: throttle=+1 is the direction
+# the colleague's SBUS-forward produced.  If a deployment test shows the
+# robot reversed, flip this array (one param, no code change).
+# =========================================================================
+
+CHASSIS_CORE_DEFAULTS = {
+    # Motor hardware
+    "pole_pairs": 10,
+    "gear_ratio": 5.2,
+    "wheel_radius": 0.10,
+    "track_width": 0.45,
+    "motor_ids": [2, 1, 4, 3],      # FL, RL, FR, RR
+    "motor_dirs": [1, 1, -1, -1],   # colleague's validated values
+    "mower_id": 5,
+
+    # Base speed
+    "run_rpm": 100,
+    "rotate_rpm": 50,
+    "turn_max_rpm": 0,
+
+    # Steering model
+    "turn_inner_ratio": -0.20,
+    "arc_turn_blend_ms": 700,
+
+    # In-place rotation
+    "rotate_in_place_enable": True,
+    "rotate_direction_sign": 1,
+    "rotate_factory_current_control_enable": True,
+    "rotate_neutral_hold_ms": 150,
+    "rotate_speed_guard_enable": True,
+    "rotate_start_max_rpm": 25.0,
+    "rotate_start_guard_timeout_ms": 1200,
+    "rotate_max_current": 500,      # 10mA units → 5.00A in-place torque
+
+    # Speed ramp
+    "speed_accel_rpm_s": 10,
+    "speed_decel_rpm_s": 30,
+
+    # Wheel speed-loop PI (current mode)
+    "wheel_control_mode": "current",
+    "wheel_speed_kp": 0.60,
+    "wheel_speed_ki": 0.05,
+    "wheel_feedforward_current": 24,
+    "wheel_max_current": 35,
+    "wheel_integral_max_current": 10,
+
+    # Startup current ramp
+    "wheel_start_initial_current": 55,
+    "wheel_start_step_current": 2,
+    "wheel_start_step_ms": 200,
+    "wheel_start_max_current": 70,
+    "wheel_start_threshold_rpm": 2,
+    "wheel_start_confirm_samples": 1,
+    "wheel_stall_threshold_rpm": 1,
+    "wheel_stall_confirm_samples": 3,
+    "wheel_start_timeout_ms": 7000,
+    "wheel_overspeed_rpm": 120,
+    "speed_feedback_timeout_ms": 1000,
+
+    # Mower
+    "cut_current": 0,
+
+    # RC channel thresholds (SBUS raw values)
+    "low_threshold": 800,
+    "high_threshold": 1199,
+    "throttle_channel": 3,
+    "steering_channel": 4,
+    "mower_channel": 2,
+    "gear_channel": 6,
+
+    # Failsafe / timing
+    "failsafe_ms": 300,
+    "heartbeat_ms": 200,
+    "control_ms": 50,
+    "speed_query_ms": 50,
+
+    # Gear profiles (SBUS gear switch)
+    "gear_select_enable": True,
+    "gear_low_run_rpm": 70,
+    "gear_low_turn_max_rpm": 70,
+    "gear_mid_run_rpm": 120,
+    "gear_mid_turn_max_rpm": 100,
+    "gear_high_run_rpm": 140,
+    "gear_high_turn_max_rpm": 100,
+
+    # App control (multi-source; the ROS2 shell also exposes /chassis/intent)
+    "app_control_enable": True,
+    "app_udp_port": 8091,
+    "app_timeout_ms": 300,
+
+    # Logging
+    "show_log": False,
+
+    # IMU heading hold
+    "imu_heading_enable": True,
+    "imu_yaw_sign": -1.0,
+    "imu_calibrate_ms": 3000,
+    "imu_deadband_dps": 0.30,
+    "heading_kp": 1.2,
+    "heading_ki": 0.0,
+    "heading_kd": 0.2,
+    "heading_integral_max_correction": 0,
+    "heading_max_correction": 5,
+    "heading_correction_sign": -1,
+    "heading_forward_trim": 0,
+    "heading_reverse_trim": 0,
+    "heading_reset_steering_hold_ms": 500,
+
+    # Direction-change hold (brake before reversing)
+    "direction_change_hold_enable": True,
+    "direction_change_stop_rpm": 5.0,
+    "direction_change_hold_timeout_ms": 1500,
+    "direction_change_post_hold_ms": 1000,
+    "direction_change_post_max_diff_rpm": 4,
+
+    # Lateral hold (off by default)
+    "lateral_hold_enable": False,
+    "lateral_kp_deg_per_m": 0.0,
+    "lateral_max_heading_deg": 0.0,
+}
+
+# =========================================================================
 # Safety
 # =========================================================================
 
@@ -193,6 +331,7 @@ TOPIC_IMU_DATA       = "/imu/data"
 TOPIC_FIX            = "/fix"
 TOPIC_CHASSIS_STATUS = "/chassis/status"
 TOPIC_MASTER_STATE   = "/master/state"
+TOPIC_CHASSIS_INTENT = "/chassis/intent"   # std_msgs/String JSON — primary chassis control interface
 
 # TF frames
 FRAME_ODOM           = "odom"

@@ -10,6 +10,7 @@
   <depend>nav_msgs</depend>
   <depend>std_msgs</depend>
   <depend>cleaning_robot_common</depend>
+  <depend>chassis_core</depend>
   <depend>tf2_ros</depend>
   <export><build_type>ament_python</build_type></export>
 </package>

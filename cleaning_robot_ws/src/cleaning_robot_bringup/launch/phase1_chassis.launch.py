@@ -68,7 +68,6 @@ def generate_launch_description():
         parameters=[
             params_file,
             {"simulate": sim_val},
-            {"left_motor_invert": True},
         ],
     )
 

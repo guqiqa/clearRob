@@ -7,57 +7,137 @@ chassis_driver:
     # CAN
     can_interface: "can0"
 
-    # Kinematics (confirmed from hardware measurement)
-    pole_pairs: 10             # 20-pole motor = 10 pole pairs
-    gear_ratio: 5.2            # 5.2:1 reduction gearbox
-    wheel_radius: 0.10         # 200mm wheel diameter (vendor WheelPID V2 config)
-    track_width: 0.45          # 450mm track width (vendor WheelPID V2 config)
-
     # Control limits (calibrated from candump data)
-    max_velocity: 0.5          # m/s (estimated, needs field calibration)
-    max_current: 500           # ×10mA = 5.0A max
-    current_deadzone: 10       # ×10mA = 0.1A dead zone
-
-    # Timing
-    query_interval_ms: 20      # Speed query period
-    heartbeat_interval_ms: 10  # CAN heartbeat period
+    max_velocity: 0.5          # m/s (cmd_vel compat mapping)
+    max_angular_velocity: 2.0  # rad/s (cmd_vel compat mapping)
 
     # Safety
-    cmd_vel_timeout_ms: 500    # cmd_vel timeout → emergency stop
-    query_timeout_ms: 100      # CAN query response timeout
-    motor_temp_warn_c: 80.0    # Motor overheat warning
-    motor_temp_cutoff_c: 100.0 # Motor thermal cutoff
-
-    # Wheel speed-loop control (WheelPID V2 port, current mode — validated)
-    # "current" = software PI + startup ramp on OID current control (0x01).
-    # This is the mode the vendor WheelPID V2 actually runs (verified on the
-    # bus).  "speed" (driver 0x02 closed-loop) is NOT supported by this
-    # driver firmware and must not be used.
-    wheel_control_mode: "current"
-    speed_accel_rpm_s: 10      # target ramp while accelerating (wheel RPM/s)
-    speed_decel_rpm_s: 30      # target ramp while decelerating (wheel RPM/s)
-    wheel_max_current: 35      # ×10mA = 0.35A, software PI run limit
-    wheel_speed_kp: 0.60       # software PI Kp (current mode only)
-    wheel_speed_ki: 0.05       # software PI Ki (current mode only)
-    wheel_feedforward_current: 24    # ×10mA feed-forward at full target (current mode)
-    wheel_integral_max_current: 10   # ×10mA integral clamp (current mode)
-    wheel_start_initial_current: 55  # ×10mA startup current ramp (current mode)
-    wheel_start_step_current: 2      # ×10mA per startup step
-    wheel_start_step_ms: 200
-    wheel_start_max_current: 70      # ×10mA
-    wheel_start_threshold_rpm: 2     # wheel RPM = "started"
-    wheel_start_confirm_samples: 1
-    wheel_stall_threshold_rpm: 1
-    wheel_stall_confirm_samples: 3
-    wheel_start_timeout_ms: 7000
-    wheel_overspeed_rpm: 120         # latches stop if exceeded
-    speed_feedback_timeout_ms: 1000  # feedback older than this → stop wheel
-    control_interval_ms: 50          # control loop period
-    motor_dirs: [-1, -1, 1, 1]       # FL, RL, FR, RR physical direction (calibrated: +x cmd → car must go forward)
-    motor_gains: [1.082, 1.131, 1.089, 1.000]  # FL, RL, FR, RR per-motor speed gain (calibrated 2026-08-03 iter2)
+    cmd_vel_timeout_ms: 500    # cmd_vel timeout → failsafe
+    intent_timeout_ms: 300     # /chassis/intent timeout → falls back
 
     # Simulation
     simulate: false            # Set true for PC testing without CAN hardware
+
+    # ====================================================================
+    # chassis_core — the C++ field-tuned control engine (colleague WheelPID V2
+    # embedded via pybind11).  These override the config.py defaults; every key
+    # maps to chassis_core::configFromDict.  See 需求文档_底盘核心架构.md for
+    # the full key↔config.xml↔meaning table.
+    # ====================================================================
+    chassis_core:
+      # Motor hardware
+      pole_pairs: 10
+      gear_ratio: 5.2
+      wheel_radius: 0.10
+      track_width: 0.45
+      motor_ids: [2, 1, 4, 3]      # FL, RL, FR, RR
+      motor_dirs: [1, 1, -1, -1]   # colleague's validated values (flip here if a test shows reversal)
+      mower_id: 5
+
+      # Base speed
+      run_rpm: 100
+      rotate_rpm: 50
+      turn_max_rpm: 0
+
+      # Steering model
+      turn_inner_ratio: -0.20
+      arc_turn_blend_ms: 700
+
+      # In-place rotation (5.00A factory torque)
+      rotate_in_place_enable: true
+      rotate_direction_sign: 1
+      rotate_factory_current_control_enable: true
+      rotate_neutral_hold_ms: 150
+      rotate_speed_guard_enable: true
+      rotate_start_max_rpm: 25.0
+      rotate_start_guard_timeout_ms: 1200
+      rotate_max_current: 500
+
+      # Speed ramp
+      speed_accel_rpm_s: 10
+      speed_decel_rpm_s: 30
+
+      # Wheel speed-loop PI (current mode — driver firmware has no 0x02 speed mode)
+      wheel_control_mode: "current"
+      wheel_speed_kp: 0.60
+      wheel_speed_ki: 0.05
+      wheel_feedforward_current: 24
+      wheel_max_current: 35
+      wheel_integral_max_current: 10
+
+      # Startup current ramp
+      wheel_start_initial_current: 55
+      wheel_start_step_current: 2
+      wheel_start_step_ms: 200
+      wheel_start_max_current: 70
+      wheel_start_threshold_rpm: 2
+      wheel_start_confirm_samples: 1
+      wheel_stall_threshold_rpm: 1
+      wheel_stall_confirm_samples: 3
+      wheel_start_timeout_ms: 7000
+      wheel_overspeed_rpm: 120
+      speed_feedback_timeout_ms: 1000
+
+      # Mower (Phase 2)
+      cut_current: 0
+
+      # RC channel thresholds (SBUS raw 172-1811)
+      low_threshold: 800
+      high_threshold: 1199
+      throttle_channel: 3
+      steering_channel: 4
+      mower_channel: 2
+      gear_channel: 6
+
+      # Failsafe / timing
+      failsafe_ms: 300
+      heartbeat_ms: 200
+      control_ms: 50
+      speed_query_ms: 50
+
+      # Gear profiles (SBUS gear switch / intent gear)
+      gear_select_enable: true
+      gear_low_run_rpm: 70
+      gear_low_turn_max_rpm: 70
+      gear_mid_run_rpm: 120
+      gear_mid_turn_max_rpm: 100
+      gear_high_run_rpm: 140
+      gear_high_turn_max_rpm: 100
+
+      # App / multi-source control (the ROS2 shell also exposes /chassis/intent)
+      app_control_enable: true
+      app_udp_port: 8091
+      app_timeout_ms: 300
+
+      # Logging (off to keep the log quiet)
+      show_log: false
+
+      # IMU heading hold
+      imu_heading_enable: true
+      imu_yaw_sign: -1.0
+      imu_calibrate_ms: 3000
+      imu_deadband_dps: 0.30
+      heading_kp: 1.2
+      heading_ki: 0.0
+      heading_kd: 0.2
+      heading_integral_max_correction: 0
+      heading_max_correction: 5
+      heading_correction_sign: -1
+      heading_forward_trim: 0
+      heading_reverse_trim: 0
+      heading_reset_steering_hold_ms: 500
+
+      # Direction-change hold (brake before reversing)
+      direction_change_hold_enable: true
+      direction_change_stop_rpm: 5.0
+      direction_change_hold_timeout_ms: 1500
+      direction_change_post_hold_ms: 1000
+      direction_change_post_max_diff_rpm: 4
+
+      # Lateral hold (off by default)
+      lateral_hold_enable: false
+      lateral_kp_deg_per_m: 0.0
+      lateral_max_heading_deg: 0.0
 
 # ---- imu_driver ----
 imu_driver:
