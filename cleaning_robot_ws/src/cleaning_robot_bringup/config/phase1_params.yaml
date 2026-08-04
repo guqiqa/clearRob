@@ -31,7 +31,7 @@ chassis_driver:
       wheel_radius: 0.10
       track_width: 0.45
       motor_ids: [2, 1, 4, 3]      # FL, RL, FR, RR
-      motor_dirs: [1, 1, -1, -1]   # colleague's validated values (flip here if a test shows reversal)
+      motor_dirs: [-1, -1, 1, 1]   # flipped 2026-08-04: colleague's [1,1,-1,-1] tested REVERSED on ground → all 4 flipped to match Python-port calibration
       mower_id: 5
 
       # Base speed

@@ -202,7 +202,7 @@ CHASSIS_CORE_DEFAULTS = {
     "wheel_radius": 0.10,
     "track_width": 0.45,
     "motor_ids": [2, 1, 4, 3],      # FL, RL, FR, RR
-    "motor_dirs": [1, 1, -1, -1],   # colleague's validated values
+    "motor_dirs": [-1, -1, 1, 1],   # flipped 2026-08-04 — colleague's [1,1,-1,-1] tested REVERSED; matches Python-port MOTOR_DIRS
     "mower_id": 5,
 
     # Base speed

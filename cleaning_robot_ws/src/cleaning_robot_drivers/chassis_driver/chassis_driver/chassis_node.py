@@ -25,6 +25,7 @@ Intent JSON:  {"throttle": -1..1, "steering": -1..1, "gear": "LOW|MID|HIGH",
                "mower": 0|1, "estop": 0|1}
 """
 
+import ast
 import json
 import math
 import threading
@@ -220,8 +221,17 @@ class ChassisDriverNode(Node):
 
     def _cb_intent(self, msg: String) -> None:
         try:
-            d = json.loads(msg.data)
-        except (json.JSONDecodeError, TypeError):
+            data = msg.data
+            if not data:
+                return
+            # `ros2 topic pub` mangles strict JSON into a Python-dict literal
+            # ('{"throttle": 0.5}' → {'throttle': 0.5}).  Accept both forms so
+            # manual terminal commands work without escaping gymnastics.
+            try:
+                d = json.loads(data)
+            except json.JSONDecodeError:
+                d = ast.literal_eval(data)
+        except (json.JSONDecodeError, TypeError, ValueError, SyntaxError):
             self.get_logger().warn(f"bad intent JSON: {msg.data!r}")
             return
         self._intent["throttle"] = _clamp(float(d.get("throttle", 0.0)), -1.0, 1.0)
@@ -346,9 +356,12 @@ class ChassisDriverNode(Node):
         # ---- send CAN currents ----
         for i, cid in enumerate(CORE_ORDER):
             self._send_frame(*make_current_frame(cid, int(currents[i])))
+        # A safety latch is a transient event — log it, don't permanently glue
+        # _estop (that would leave the chassis in failsafe forever).  The C++
+        # core clears its own latch on the next stopped tick; the operator
+        # clears estop via intent/RC.
         if safety:
             self.get_logger().error(f"CHASSIS SAFETY: {reason}")
-            self._estop = True
 
     def _resolve_command(self):
         """Priority: estop > intent active > cmd_vel active > failsafe."""
