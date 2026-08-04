@@ -51,12 +51,11 @@ class MotorModel:
         self.driver_accel = ctrl.accel_rpm_s * ctrl.pole_pairs * ctrl.gear_ratio
         self.driver_decel = ctrl.decel_rpm_s * ctrl.pole_pairs * ctrl.gear_ratio
         self.tau = 0.08
-        # current-mode plant — calibrated so 1.7 A (170 x10mA) startup current
-        # lifts the wheel from 0 to ~20 rpm in about 1.2 s (5.2:1 gearbox
-        # inertia). The WheelPID V2 PI gains are stable on the real hardware
-        # with this magnitude of acceleration authority.
-        self.coulomb_A = 0.30
-        self.visc_A_per_rpm = 0.016
+        # current-mode plant — Coulomb drag set so a 0.24 A feed-forward (24
+        # x10mA) sustains ~0.2 m/s (measured: 0.2 m/s converges on the real
+        # robot), and the 0.55 A startup current breaks static friction.
+        self.coulomb_A = 0.12
+        self.visc_A_per_rpm = 0.004
         self.k_acc = 12.0   # rpm/s per A of excess torque
         # scenario hooks
         self.blocked = set()       # cids mechanically blocked (stall)
@@ -90,7 +89,13 @@ class MotorModel:
             self.rpm[cid] = 0.0
             self.erpm[cid] = 0
             return
-        I_amp = value / 100.0
+        # value is the CAN current command, which the controller has already
+        # multiplied by motor_dirs.  Restore the PHYSICAL current direction so
+        # the plant responds the way the real wheel does (mirrors chassis_node,
+        # where cmd_vel→physical wheel RPM and the controller applies dirs only
+        # at its output layer).
+        physical_cur = value * self.ctrl.motor_dirs.get(cid, 1)
+        I_amp = physical_cur / 100.0
         rpm = self.rpm[cid]
         if rpm == 0.0 and abs(I_amp) < self.coulomb_A:
             return  # static friction not overcome

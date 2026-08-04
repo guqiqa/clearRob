@@ -10,76 +10,76 @@ t,target_rpm,actual_rpm,cmd,cmd_kind,safety
 0.4,0.0,0.0,0,current,
 0.45,0.0,0.0,0,current,
 0.5,0.0,0.0,0,current,
-0.55,35.80986219567645,0.9615384615384616,190,current,
-0.6,35.80986219567645,2.0384615384615383,210,current,
-0.65,35.80986219567645,3.2115384615384617,230,current,
-0.7,35.80986219567645,4.5,250,current,
-0.75,35.80986219567645,5.903846153846154,270,current,
-0.8,35.80986219567645,7.403846153846154,290,current,
-0.85,35.80986219567645,9.0,310,current,
-0.9,35.80986219567645,10.596153846153847,310,current,
-0.95,35.80986219567645,12.307692307692308,330,current,
-1.0,35.80986219567645,210.0,350,current,
-1.05,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.1,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.15,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.2,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.25,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.3,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.35,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.4,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.45,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.5,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.55,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.6,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.65,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.7,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.75,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.8,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.85,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.9,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-1.95,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.0,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.05,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.1,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.15,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.2,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.25,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.3,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.35,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.4,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.45,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.5,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.55,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.6,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.65,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.7,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.75,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.8,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.85,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.9,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-2.95,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.0,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.05,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.1,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.15,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.2,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.25,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.3,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.35,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.4,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.45,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.5,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.55,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.6,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.65,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.7,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.75,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.8,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.85,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.9,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-3.95,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
-4.0,35.80986219567645,210.0,0,current,wheel overspeed cid=2 rpm=210
+0.55,28.64788975654116,0.25,-55,current,
+0.6,28.64788975654116,0.5192307692307693,-55,current,
+0.65,28.64788975654116,0.7692307692307693,-55,current,
+0.7,28.64788975654116,1.0384615384615385,-57,current,
+0.75,28.64788975654116,1.3076923076923077,-57,current,
+0.8,28.64788975654116,1.5769230769230769,-57,current,
+0.85,28.64788975654116,1.8461538461538463,-57,current,
+0.9,28.64788975654116,2.1153846153846154,-57,current,
+0.95,28.64788975654116,2.3846153846153846,-59,current,
+1.0,28.64788975654116,210.0,-19,current,
+1.05,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.1,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.15,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.2,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.25,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.3,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.35,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.4,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.45,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.5,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.55,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.6,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.65,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.7,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.75,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.8,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.85,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.9,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+1.95,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.0,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.05,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.1,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.15,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.2,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.25,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.3,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.35,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.4,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.45,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.5,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.55,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.6,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.65,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.7,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.75,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.8,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.85,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.9,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+2.95,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.0,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.05,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.1,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.15,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.2,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.25,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.3,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.35,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.4,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.45,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.5,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.55,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.6,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.65,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.7,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.75,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.8,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.85,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.9,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+3.95,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
+4.0,28.64788975654116,210.0,0,current,wheel overspeed cid=2 rpm=210
 4.05,0.0,210.0,0,current,wheel overspeed cid=2 rpm=210
 4.1,0.0,210.0,0,current,wheel overspeed cid=2 rpm=210
 4.15,0.0,210.0,0,current,wheel overspeed cid=2 rpm=210

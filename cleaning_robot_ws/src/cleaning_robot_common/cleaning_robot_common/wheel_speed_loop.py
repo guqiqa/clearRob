@@ -221,6 +221,19 @@ class WheelSpeedController:
                     self.started[cid] = True
                     self.wheel_integral[cid] = 0.0
                     self.stall_count[cid] = 0
+                    # Startup→PI handoff: the start current (55–70 mA) far
+                    # exceeds the PI run limit (35 mA), so the wheel is already
+                    # moving faster than the ramp.  Align the ramp to the
+                    # measured speed (clamped to the target) so the first PI
+                    # tick sees error ≈ 0 — no reverse brake, no lost progress.
+                    # After this the faster ramp (accel_rpm_s) keeps the wheel
+                    # from running far ahead, and the PI supplies real torque.
+                    if target_rpm >= 0:
+                        self.ramped[cid] = max(self.ramped[cid],
+                                               min(measured_rpm, target_rpm))
+                    else:
+                        self.ramped[cid] = min(self.ramped[cid],
+                                               max(measured_rpm, target_rpm))
             else:
                 self.start_confirm[cid] = 0
             steps = int(self.start_elapsed_s[cid] * 1000.0 / self.start_step_ms)
@@ -230,7 +243,12 @@ class WheelSpeedController:
                 self.safety_latched = True
                 self.safety_reason = f"startup timeout cid={cid}"
                 return 0
-            return cur * self.motor_dirs.get(cid, 1)
+            # Start current must FOLLOW the target direction (matches vendor:
+            # (desired>0 ? +start : -start) * dirs).  Old code returned a
+            # positive start current for reverse targets → wheel lurched
+            # forward first, then PI dragged it back → "jerk then brake".
+            polarity = 1 if target_rpm >= 0 else -1
+            return int(cur * polarity) * self.motor_dirs.get(cid, 1)
         # Stall re-arm
         if abs(measured_rpm) < self.stall_threshold_rpm:
             self.stall_count[cid] += 1
@@ -243,7 +261,17 @@ class WheelSpeedController:
         else:
             self.stall_count[cid] = 0
         # PI + feed-forward
-        error = ramp_rpm - measured_rpm
+        # The ramp drives the PI.  During startup the 55–70 mA start current
+        # far exceeds the 35 mA run limit, so at the start→PI handoff the wheel
+        # is usually ahead of the ramp.  The handoff block in the startup branch
+        # above aligned the ramp to the measured speed once; from here the PI
+        # tracks the ramp normally.  A continuous catch-up (ramp always = the
+        # measured speed) made error ≈ 0 every tick, which killed the PI term —
+        # leaving only the small feed-forward → the robot lost all power under
+        # load.  So NO continuous catch-up here: let the PI provide real
+        # torque, and rely on the faster ramp (accel_rpm_s) to keep the wheel
+        # from running far ahead of the ramp.
+        error = self.ramped[cid] - measured_rpm
         dt = self.control_interval_s
         next_integral = self.wheel_integral[cid] + error * dt
         if self.ki > 0.0:
@@ -251,9 +279,9 @@ class WheelSpeedController:
             next_integral = _clamp(next_integral, -lim, lim)
         else:
             next_integral = 0.0
-        ff_scale = _clamp(abs(ramp_rpm) / max(1.0, abs(target_rpm)), 0.0, 1.0)
+        ff_scale = _clamp(abs(self.ramped[cid]) / max(1.0, abs(target_rpm)), 0.0, 1.0)
         feedforward = self.ff_current * ff_scale
-        ff = feedforward if ramp_rpm >= 0 else -feedforward
+        ff = feedforward if self.ramped[cid] >= 0 else -feedforward
         raw = ff + self.kp * error + self.ki * next_integral
         limited = _clamp(raw, -self.wheel_max_current, self.wheel_max_current)
         if abs(raw) <= self.wheel_max_current:
