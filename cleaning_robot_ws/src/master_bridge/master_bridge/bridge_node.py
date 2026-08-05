@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-master_bridge/bridge_node.py — Phase 1 state machine + remote→chassis bridge.
+master_bridge/bridge_node.py — Master state machine + remote→chassis bridge.
 
-Remote control (C7mini) → /chassis/intent (primary, JSON) + /cmd_vel (compat).
-The intent interface feeds the C++ chassis core (steering model, gear, estop)
-while keeping the STANDBY ↔ MANUAL state machine gated by SWA.
+V1.2: Extended from STANDBY↔MANUAL to the full multi-mode state machine
+(ported from horizon1 master_controller/master_node.py):
+
+  STANDBY / MANUAL / CRUISING / CLEANING / RETURNING / OBSTACLE_PAUSE
+
+Control sources:
+  - Remote (C7mini) /joy → /chassis/intent (primary, gated by SWA)
+  - UnifiedCommand (control/cmd/unified) → AUTO_SWEEP / ROAD_SWEEP / STOP / MANUAL
+  - Semantic alert (fusion/semantic_alert) → PEDESTRIAN_AHEAD → OBSTACLE_PAUSE
+  - Planner trigger (control/trigger_planning) → "GO" / "GO_ROAD" → path_planner
 
 Intent JSON:  {"throttle": -1..1, "steering": -1..1, "gear": "MID",
                "mower": 0|1, "estop": 0|1}
@@ -22,16 +29,21 @@ from std_msgs.msg import String
 
 from cleaning_robot_common.config import (
     TOPIC_CMD_VEL, TOPIC_JOY, TOPIC_MASTER_STATE, TOPIC_CHASSIS_INTENT,
+    TOPIC_UNIFIED_CMD, TOPIC_SEMANTIC_ALERT, TOPIC_TRIGGER_PLANNING,
     MAX_LINEAR_VELOCITY, MAX_ANGULAR_VELOCITY,
     ESTOP_DEBOUNCE_MS,
 )
 
-STATE_STANDBY = "STANDBY"
-STATE_MANUAL  = "MANUAL"
+STATE_STANDBY  = "STANDBY"
+STATE_MANUAL   = "MANUAL"
+STATE_CRUISING = "CRUISING"
+STATE_CLEANING = "CLEANING"
+STATE_RETURNING = "RETURNING"
+STATE_OBSTACLE_PAUSE = "OBSTACLE_PAUSE"   # pause on semantic alert
 
 
 class MasterBridgeNode(Node):
-    """Phase 1 master bridge: remote control → chassis intent."""
+    """Full-mode master state machine: remote + autonomous control."""
 
     def __init__(self) -> None:
         super().__init__("master_bridge")
@@ -55,6 +67,7 @@ class MasterBridgeNode(Node):
 
         # State
         self._state = STATE_STANDBY
+        self._resume_state = None      # resume target after OBSTACLE_PAUSE
         self._last_estop_time = 0.0
         self._estop_active = False
         self._swa_btn = 0          # debounced SWA state
@@ -69,9 +82,49 @@ class MasterBridgeNode(Node):
         self._pub_intent = self.create_publisher(String, TOPIC_CHASSIS_INTENT, 10)
         self._pub_state  = self.create_publisher(String, TOPIC_MASTER_STATE, 10)
         self._sub_joy    = self.create_subscription(Joy, TOPIC_JOY, self._cb_joy, 10)
+        self._sub_cmd    = self.create_subscription(String, TOPIC_UNIFIED_CMD, self._cb_unified, 10)
+        self._sub_alert  = self.create_subscription(String, TOPIC_SEMANTIC_ALERT, self._cb_alert, 10)
+        self._pub_trigger = self.create_publisher(String, TOPIC_TRIGGER_PLANNING, 10)
         self._hb_timer   = self.create_timer(1.0, self._publish_heartbeat)
 
         self.get_logger().info(f"master_bridge started — state: {self._state}")
+
+    # ---- UnifiedCommand (AUTO_SWEEP / ROAD_SWEEP / STOP / MANUAL) ----
+
+    def _cb_unified(self, msg: String) -> None:
+        cmd = msg.data
+        self.get_logger().info(f"收到最高指令: {cmd}")
+        if cmd == "AUTO_SWEEP":
+            self._state = STATE_CRUISING
+            self._publish_trigger("GO")
+        elif cmd == "ROAD_SWEEP":
+            self._state = STATE_CRUISING
+            self._publish_trigger("GO_ROAD")
+        elif cmd == "STOP":
+            self._state = STATE_STANDBY
+            self._resume_state = None
+            self._stop()
+        elif cmd == "MANUAL":
+            self._state = STATE_MANUAL
+        self._pub_state.publish(String(data=self._state))
+
+    # ---- Semantic alert (fusion_engine) ----
+
+    def _cb_alert(self, msg: String) -> None:
+        if msg.data == "PEDESTRIAN_AHEAD":
+            if self._state == STATE_CRUISING:
+                self.get_logger().warn("🚨 行人！暂停自动巡航，原地等待...")
+                self._resume_state = self._state
+                self._state = STATE_OBSTACLE_PAUSE
+                self._stop()
+        elif msg.data == "CLEAR":
+            if self._state == STATE_OBSTACLE_PAUSE:
+                self.get_logger().info("✅ 行人离开，恢复自动巡航")
+                self._state = self._resume_state or STATE_CRUISING
+                self._resume_state = None
+                # re-trigger planner to continue
+                self._publish_trigger("GO")
+        self._pub_state.publish(String(data=self._state))
 
     # ---- Joy → state machine + intent + cmd_vel ----
 
@@ -91,7 +144,7 @@ class MasterBridgeNode(Node):
             self._estop_active = False
             self.get_logger().info("ESTOP released")
 
-        # SWA debounce: raw button must be stable for 0.5s before state change
+        # SWA debounce: SWA ON → MANUAL; SWA OFF → back to STANDBY
         if btn_start != self._swa_last:
             self._swa_last = btn_start
             self._swa_changed = now
@@ -101,9 +154,10 @@ class MasterBridgeNode(Node):
                 self._state = STATE_MANUAL
             else:
                 self._state = STATE_STANDBY
-            self.get_logger().info(f"→ {self._state}" if btn_start else f"→ STANDBY")
+                self._resume_state = None
+            self.get_logger().info(f"→ {self._state}")
 
-        # Intent: estop overrides everything; MANUAL gates motion; STANDBY stops.
+        # Intent: estop overrides everything; MANUAL gates motion; others stop.
         estop = 1 if self._estop_active else 0
         if self._estop_active or self._state != STATE_MANUAL:
             t, s = 0.0, 0.0
@@ -120,10 +174,18 @@ class MasterBridgeNode(Node):
         self._pub_cmd.publish(twist)
         self._pub_state.publish(String(data=self._state))
 
-    def _publish_zero(self) -> None:
+    # ---- helpers ----
+
+    def _publish_trigger(self, trigger: str) -> None:
+        self._pub_trigger.publish(String(data=trigger))
+
+    def _stop(self) -> None:
         self._pub_cmd.publish(Twist())
         self._pub_intent.publish(String(data=json.dumps(
             {"throttle": 0.0, "steering": 0.0, "gear": "MID", "mower": 0, "estop": 1})))
+
+    def _publish_zero(self) -> None:
+        self._stop()
 
     def _publish_heartbeat(self) -> None:
         self.get_logger().debug(f"heartbeat: {self._state} "
@@ -148,3 +210,4 @@ def main(args=None) -> None:
 
 if __name__ == "__main__":
     main()
+

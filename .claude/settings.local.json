@@ -1,10 +1,23 @@
 {
   "permissions": {
     "allow": [
+      "Read(*)",
+      "Glob(*)",
+      "Grep(*)",
+      "Bash(*)",
+      "Agent(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
       "Bash(python3)",
       "Bash(python)",
       "Bash(powershell.exe -Command 'Get-ChildItem \"HKCU:\\\\Software\\\\Python\\\\PythonCore\" -Recurse 2>$null | Where-Object { $_.PSChildName -like \"*Continuum*\" -or $_.PSChildName -like \"*Anaconda*\" } | ForEach-Object { $_.PSPath }')",
       "Bash(powershell.exe -Command 'Get-ChildItem \"HKCU:\\\\Software\\\\Python\\\\ContinuumAnalytics\" -ErrorAction SilentlyContinue | ForEach-Object { $_.PSPath }')"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Bash(git clean *)"
     ]
   },
   "hooks": {

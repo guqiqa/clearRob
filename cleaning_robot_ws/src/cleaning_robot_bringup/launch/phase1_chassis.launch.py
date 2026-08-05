@@ -36,9 +36,14 @@ def generate_launch_description():
         "namespace", default_value="",
         description="Robot namespace (empty = no namespace)"
     )
+    autopilot_arg = DeclareLaunchArgument(
+        "autopilot", default_value="false",
+        description="Launch Phase 2 autonomous nodes (path_planner + fusion_engine)"
+    )
 
     sim_val = LaunchConfiguration("simulate")
     ns = LaunchConfiguration("namespace")
+    autopilot_val = LaunchConfiguration("autopilot")
 
     # ---- Node definitions ----
     imu_node = Node(
@@ -80,6 +85,27 @@ def generate_launch_description():
         parameters=[params_file],
     )
 
+    # ---- Phase 2 nodes (autonomous) — off by default, enable with autopilot:=true ----
+    path_planner_node = Node(
+        package="path_planner",
+        executable="path_planner_node",
+        name="path_planner",
+        namespace=ns,
+        output="screen",
+        condition=IfCondition(autopilot_val),
+        parameters=[params_file],
+    )
+
+    fusion_node = Node(
+        package="fusion_engine",
+        executable="fusion_node",
+        name="fusion_engine",
+        namespace=ns,
+        output="screen",
+        condition=IfCondition(autopilot_val),
+        parameters=[params_file],
+    )
+
     # RTK — skip in sim mode (no GPS signal indoors)
     rtk_node_sim = Node(
         package="rtk_driver",
@@ -103,6 +129,7 @@ def generate_launch_description():
     return LaunchDescription([
         sim_arg,
         namespace_arg,
+        autopilot_arg,
         LogInfo(msg=["Phase 1 chassis bringup — simulate=", sim_val]),
         # Launch drivers with staggered start to avoid CAN bus contention
         imu_node,
@@ -110,4 +137,7 @@ def generate_launch_description():
         TimerAction(period=1.0, actions=[remote_node]),
         TimerAction(period=1.5, actions=[rtk_node_sim, rtk_node_real]),
         TimerAction(period=2.0, actions=[bridge_node]),
+        # Phase 2 autonomous nodes (staggered, only if autopilot:=true)
+        TimerAction(period=2.5, actions=[fusion_node]),
+        TimerAction(period=3.0, actions=[path_planner_node]),
     ])

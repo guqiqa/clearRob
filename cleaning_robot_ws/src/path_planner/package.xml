@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>path_planner</name>
+  <version>0.1.0</version>
+  <description>
+    Coverage path planner (boustrophedon/zigzag + road mode) driving the V3
+    chassis through /chassis/intent.  Ported from the horizon1 simulation
+    project, replacing the Nav2 dependency with an odometry-based waypoint
+    executor for the real CAN-driven robot.
+  </description>
+  <maintainer email="aiview@example.com">AIview Dev</maintainer>
+  <license>Apache-2.0</license>
+
+  <depend>rclpy</depend>
+  <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <exec_depend>shapely</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

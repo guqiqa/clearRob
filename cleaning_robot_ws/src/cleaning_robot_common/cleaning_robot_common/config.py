@@ -361,7 +361,12 @@ TOPIC_IMU_DATA       = "/imu/data"
 TOPIC_FIX            = "/fix"
 TOPIC_CHASSIS_STATUS = "/chassis/status"
 TOPIC_MASTER_STATE   = "/master/state"
-TOPIC_CHASSIS_INTENT = "/chassis/intent"   # std_msgs/String JSON — primary chassis control interface
+
+# Phase 2 — autonomous / perception topics (from horizon1 port)
+TOPIC_CHASSIS_INTENT   = "/chassis/intent"   # std_msgs/String JSON — primary chassis control interface
+TOPIC_UNIFIED_CMD      = "control/cmd/unified"
+TOPIC_SEMANTIC_ALERT   = "fusion/semantic_alert"
+TOPIC_TRIGGER_PLANNING = "control/trigger_planning"
 
 # TF frames
 FRAME_ODOM           = "odom"
