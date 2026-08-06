@@ -134,17 +134,24 @@ class MasterBridgeNode(Node):
         throttle = msg.axes[self._ax_throttle] if self._ax_throttle < len(msg.axes) else 0.0
         btn_start = msg.buttons[self._btn_start] if self._btn_start < len(msg.buttons) else 0
         btn_estop = msg.buttons[self._btn_estop] if self._btn_estop < len(msg.buttons) else 0
+        # SWB gear select (remote_driver puts gear on axes[2]: -1=LOW 0=MID +1=HIGH)
+        gear_axis = msg.axes[2] if len(msg.axes) > 2 else 0.0
+        gear = "MID"
+        if gear_axis > 0.5:
+            gear = "HIGH"
+        elif gear_axis < -0.5:
+            gear = "LOW"
 
-        # ESTOP (debounced)
+        # ESTOP (debounced) — SWA down position
         if btn_estop and not self._estop_active and (now - self._last_estop_time > self._estop_db):
             self._estop_active = True
             self._last_estop_time = now
-            self.get_logger().warn("ESTOP activated")
+            self.get_logger().warn("ESTOP activated (SWA down)")
         if not btn_estop and self._estop_active:
             self._estop_active = False
             self.get_logger().info("ESTOP released")
 
-        # SWA debounce: SWA ON → MANUAL; SWA OFF → back to STANDBY
+        # SWA debounce: up → MANUAL; middle → STANDBY
         if btn_start != self._swa_last:
             self._swa_last = btn_start
             self._swa_changed = now
@@ -164,7 +171,7 @@ class MasterBridgeNode(Node):
         else:
             t, s = throttle, steering
         intent = {"throttle": round(t, 3), "steering": round(s, 3),
-                  "gear": "MID", "mower": 0, "estop": estop}
+                  "gear": gear, "mower": 0, "estop": estop}
         self._pub_intent.publish(String(data=json.dumps(intent)))
 
         # Backward-compat /cmd_vel (other consumers; chassis prefers intent)

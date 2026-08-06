@@ -119,8 +119,8 @@ class RemoteDriverNode(Node):
         self.declare_parameter("axis_deadzone", 0.05)
         self.declare_parameter("ch_steering",   0)  # CH1
         self.declare_parameter("ch_throttle",   2)  # CH3
-        self.declare_parameter("ch_btn_start",  4)   # CH5 SWA
-        self.declare_parameter("ch_btn_estop",  5)   # CH6 SWB
+        self.declare_parameter("ch_btn_start",  4)   # CH5 SWA — 3-pos: 200=MANUAL, 1000=STANDBY, 1800=ESTOP
+        self.declare_parameter("ch_btn_estop",  5)   # CH6 SWB — 3-pos: gear select LOW/MID/HIGH
         self.declare_parameter("steering_invert", True)
         self.declare_parameter("throttle_invert", False)  # forward=high→positive
 
@@ -244,16 +244,21 @@ class RemoteDriverNode(Node):
         throt = sbus_to_axis(channels[self._ch_throt], self._centers[self._ch_throt], self._deadzone)
         if self._steer_inv: steer = -steer
         if self._throt_inv: throt = -throt
-        # SWA(CH5) 3-pos: 200=up(ON), 1000=mid(OFF), 1800=down(ON)
-        # Both up and down activate MANUAL; only middle is STANDBY
-        btn_s = 1 if channels[self._ch_start] < 700 else 0  # SWA: low(200)=ON
-        btn_e = 1 if (channels[self._ch_estop] < 700 or channels[self._ch_estop] > 1400) else 0
+        # SWA(CH5) 3-pos: 200=UP(MANUAL), 1000=MID(STANDBY), 1800=DOWN(ESTOP)
+        swa = channels[self._ch_start]
+        btn_manual = 1 if swa < 700 else 0       # up → MANUAL
+        btn_estop  = 1 if swa > 1400 else 0      # down → ESTOP (merged onto SWA)
+        # SWB(CH6) 3-pos: gear select → axes[2] as -1/0/+1
+        swb = channels[self._ch_estop]
+        if swb > 1400:    gear_axis = 1.0   # HIGH
+        elif swb < 700:   gear_axis = -1.0  # LOW
+        else:             gear_axis = 0.0   # MID (default)
 
         m = Joy()
         m.header.stamp = self.get_clock().now().to_msg()
         m.header.frame_id = self._frame_id
-        m.axes = [steer, throt, 0.0, 0.0]
-        m.buttons = [btn_s, 0, btn_e, 0]
+        m.axes = [steer, throt, gear_axis, 0.0]
+        m.buttons = [btn_manual, 0, btn_estop, 0]
         self._pub.publish(m)
 
     def destroy_node(self):
