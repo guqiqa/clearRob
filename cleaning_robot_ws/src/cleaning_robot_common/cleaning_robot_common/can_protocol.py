@@ -17,7 +17,7 @@ from .config import (
     CAN_CMD_CURRENT, CAN_CMD_HEARTBEAT, CAN_CMD_QUERY,
     CAN_CMD_SPEED, CAN_CMD_SET_ACCEL, CAN_CMD_SET_DECEL,
     CAN_CMD_SET_MAX_CURRENT,
-    CAN_QUERY_SPEED,
+    CAN_QUERY_SPEED, CAN_QUERY_CURRENT,
     QUERY_RESP_MIN_LEN, QUERY_RESP_ERPM_OFF,
 )
 
@@ -92,7 +92,12 @@ def parse_query_erpm(data: bytes) -> Optional[int]:
 
 
 def parse_query_int16(data: bytes) -> Optional[int]:
-    """Extract int16 value from a generic query response (e.g. temp/current)."""
+    """Extract int16 value from a generic query response (e.g. temp/current).
+
+    Little-endian — matches the driver's int16 payload layout for the
+    non-erpm query codes (current 0x05, temp 0x07, fault 0x00).
+    """
     if not is_query_response(data) or len(data) < 4:
         return None
+    return struct.unpack("<h", data[2:4])[0]
     return struct.unpack("<h", data[2:4])[0]

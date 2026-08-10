@@ -28,7 +28,7 @@ chassis_driver:
       # Motor hardware
       pole_pairs: 10
       gear_ratio: 5.2
-      wheel_radius: 0.10
+      wheel_radius: 0.11          # 220mm tire (measured) — was 0.10 (200mm estimate)
       track_width: 0.45
       motor_ids: [2, 1, 4, 3]      # FL, RL, FR, RR
       motor_dirs: [-1, -1, 1, 1]   # flipped 2026-08-04: colleague's [1,1,-1,-1] tested REVERSED on ground → all 4 flipped to match Python-port calibration
@@ -49,7 +49,7 @@ chassis_driver:
 
       # Steering model
       turn_inner_ratio: -0.20
-      arc_turn_blend_ms: 700
+      arc_turn_blend_ms: 700         # colleague original (I'd lowered to 200, but that changed turn feel)
 
       # In-place rotation (5.00A factory torque)
       rotate_in_place_enable: true
@@ -59,7 +59,7 @@ chassis_driver:
       rotate_speed_guard_enable: true
       rotate_start_max_rpm: 25.0
       rotate_start_guard_timeout_ms: 1200
-      rotate_max_current: 500
+      rotate_max_current: 500         # ×10mA=5.00A; colleague original — user confirmed in-place turn has plenty of power
 
       # Speed ramp
       speed_accel_rpm_s: 10
@@ -69,23 +69,23 @@ chassis_driver:
       # Wheel speed-loop — RC/manual mode (formal config.xml §4 / ours)
       # ==================================================================
       wheel_control_mode: "current"
-      wheel_speed_kp: 0.60
+      wheel_speed_kp: 0.80       # was 0.60 — faster error→current under load (colleague ROS2 value)
       wheel_speed_ki: 0.05
-      wheel_feedforward_current: 24
-      wheel_max_current: 35
-      wheel_integral_max_current: 10
+      wheel_feedforward_current: 30     # was 24 — more base drive before PI kicks in
+      wheel_max_current: 500        # ×10mA=5.0A; was 250(2.5A) — motor needs 4.7A straight / 6.3A turn (SY110BLF06A curve), 2.5A couldn't pull out of drift
+      wheel_integral_max_current: 200  # ×10mA=2.0A; was 20 — integral was capped at 0.2A, couldn't push PI to target RPM at full throttle (67 vs 120)
 
       # Startup current ramp
-      wheel_start_initial_current: 55
-      wheel_start_step_current: 2
+      wheel_start_initial_current: 300   # ×10mA=3.0A; was 200 — break ground static friction (60kg)
+      wheel_start_step_current: 20      # was 10 — faster startup current climb to peak
       wheel_start_step_ms: 200
-      wheel_start_max_current: 70
+      wheel_start_max_current: 500     # ×10mA=5.0A; was 250 — startup peak 2A
       wheel_start_threshold_rpm: 2
       wheel_start_confirm_samples: 1
       wheel_stall_threshold_rpm: 1
       wheel_stall_confirm_samples: 3
       wheel_start_timeout_ms: 7000
-      wheel_overspeed_rpm: 120
+      wheel_overspeed_rpm: 180     # was 120 — MID gear max = 120, so startup overshoot triggered false latch; 180 = colleague default
       speed_feedback_timeout_ms: 1000
 
       # ---- Post-start anti-stutter (formal config.xml §4, ROS2 section) ----
@@ -153,9 +153,9 @@ chassis_driver:
       gear_low_run_rpm: 70
       gear_low_turn_max_rpm: 70
       gear_mid_run_rpm: 120
-      gear_mid_turn_max_rpm: 100
+      gear_mid_turn_max_rpm: 120      # was 100 — outer wheel full power during arc turns (ground friction)
       gear_high_run_rpm: 140
-      gear_high_turn_max_rpm: 100
+      gear_high_turn_max_rpm: 140     # was 100 — outer wheel full power during arc turns
 
       # App / multi-source control (the ROS2 shell also exposes /chassis/intent)
       app_control_enable: true
@@ -168,14 +168,14 @@ chassis_driver:
       # IMU heading hold
       imu_heading_enable: true
       imu_yaw_sign: -1.0
-      imu_calibrate_ms: 3000
-      imu_deadband_dps: 0.30
-      heading_kp: 1.2
-      heading_ki: 0.0
+      imu_calibrate_ms: 5000       # was 3000 — longer static bias calibration
+      imu_deadband_dps: 1.00       # was 0.30 — suppress ~0.9 deg/s gyro drift that was corrupting heading hold
+      heading_kp: 4.0        # was 2.0 — car drifted 8° before correction caught up; need faster/stronger response
+      heading_ki: 0.05       # was 0 — integral eliminates steady-state drift (60kg wheel asymmetry)
       heading_kd: 0.2
-      heading_integral_max_correction: 0
-      heading_max_correction: 5
-      heading_correction_sign: -1
+      heading_integral_max_correction: 10   # was 0 — allow integral to accumulate
+      heading_max_correction: 20       # was 5 — 60kg straight-line correction needs more authority (was capped at 5 RPM, too weak)
+      heading_correction_sign: -1        # REVERSE correct: right drift (yaw−) needs LEFT turn (left wheel faster) → applied = correction×(-1) = negative → left += negative (faster). Verified 2026-08-05: with +1 the car kept drifting right.
       heading_forward_trim: 0
       heading_reverse_trim: 0
       heading_reset_steering_hold_ms: 500
@@ -234,6 +234,7 @@ remote_driver:
     ch_throttle: 2       # CH3: left stick F/B
     ch_btn_start: 4      # CH5: SWA (3-pos 200/1000/1800, START/STOP) — calibrated 2026-08-03
     ch_btn_estop: 5      # CH6: SWB (2-pos 1000/200, ESTOP) — calibrated 2026-08-03
+    steering_gain: 3.0   # CH1 travel is ~0.33 of full scale — scale to full steering authority
 
     simulate: false
 

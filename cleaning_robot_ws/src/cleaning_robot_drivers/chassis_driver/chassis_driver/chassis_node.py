@@ -57,6 +57,7 @@ from cleaning_robot_common.config import (
     MAX_LINEAR_VELOCITY, MAX_ANGULAR_VELOCITY,
     MOTOR_POLE_PAIRS, MOTOR_GEAR_RATIO, WHEEL_RADIUS_M, TRACK_WIDTH_M,
     CAN_QUERY_INTERVAL_MS, CAN_HEARTBEAT_INTERVAL_MS,
+    CAN_QUERY_CURRENT, CAN_QUERY_SPEED,
     CMD_VEL_TIMEOUT_MS,
     ODOM_PUBLISH_HZ,
     CHASSIS_CORE_DEFAULTS,
@@ -68,7 +69,7 @@ from cleaning_robot_common.kinematics import (
     compute_odom_velocity, integrate_odom, yaw_to_quaternion,
 )
 from cleaning_robot_common.can_protocol import (
-    make_current_frame, make_query_frame, parse_query_erpm,
+    make_current_frame, make_query_frame, parse_query_erpm, parse_query_int16,
 )
 
 # C++ core motor order: FL, RL, FR, RR = CAN ids 2, 1, 4, 3.
@@ -99,6 +100,8 @@ class ChassisDriverNode(Node):
 
         # ---- wheel feedback (physical wheel RPM, ordered CORE_ORDER) ----
         self._measured_rpm: Dict[int, float] = {cid: 0.0 for cid in DRIVE_IDS}
+        self._measured_current: Dict[int, float] = {cid: 0.0 for cid in DRIVE_IDS}  # ×10mA feedback
+        self._last_currents = [0, 0, 0, 0]  # last PI current cmds for /chassis/status
         self._feedback_time: Dict[int, float] = {}
         self._generation: Dict[int, int] = {cid: 0 for cid in DRIVE_IDS}
         self._motor_speeds: Dict[int, float] = {cid: 0.0 for cid in DRIVE_IDS}  # m/s
@@ -338,8 +341,14 @@ class ChassisDriverNode(Node):
     def _tick_ctrl(self) -> None:
         if self._core is None:
             return
+        # TEMP DEBUG3: tick entry
+        self.get_logger().warn("DBG3 tick_ctrl entered")
         # ---- arbitration ----
         estop, throttle, steering, gear, mower = self._resolve_command()
+        # TEMP DEBUG2: always print arbitration result + intent state
+        self.get_logger().warn(
+            f"DBG2 e={int(estop)} t={throttle:.2f} s={steering:.2f} g={gear} "
+            f"intent_t={self._intent_time is not None and (time.monotonic()-self._intent_time)<=self._intent_timeout}")
         # ---- feedback arrays (CORE_ORDER) ----
         now = time.monotonic()
         rpm = []
@@ -353,6 +362,13 @@ class ChassisDriverNode(Node):
         currents, safety, reason = self._core.tick(
             throttle, steering, gear, bool(mower), bool(estop),
             rpm, valid, gen, self._yaw_deg, self._yaw_rate_dps)
+        self._last_currents = currents  # save for /chassis/status [7-10]
+        # TEMP DEBUG: throttle/steering/currents every tick
+        if throttle != 0.0 or steering != 0.0:
+            self.get_logger().warn(
+                f"DBG t={throttle:.2f} s={steering:.2f} "
+                f"cur={[int(c) for c in currents]} rpm={[int(r) for r in rpm]} "
+                f"valid={[int(v) for v in valid]} yaw={self._yaw_deg:.1f}")
         # ---- send CAN currents ----
         for i, cid in enumerate(CORE_ORDER):
             self._send_frame(*make_current_frame(cid, int(currents[i])))
@@ -430,7 +446,18 @@ class ChassisDriverNode(Node):
             self._measured_rpm.get(2, 0.0), self._measured_rpm.get(1, 0.0),
             self._measured_rpm.get(4, 0.0), self._measured_rpm.get(3, 0.0),
             float(self._yaw_deg), float(self._yaw_rate_dps),
-            float(self._estop), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+            float(self._estop),
+            # [7-10] per-wheel current command (10mA units) from the C++ core
+            float(self._last_currents[0]) if self._last_currents else 0.0,
+            float(self._last_currents[1]) if self._last_currents else 0.0,
+            float(self._last_currents[2]) if self._last_currents else 0.0,
+            float(self._last_currents[3]) if self._last_currents else 0.0,
+            # [11-14] per-wheel measured current feedback (×10mA) from CAN 0x05
+            float(self._measured_current.get(2, 0.0)),
+            float(self._measured_current.get(1, 0.0)),
+            float(self._measured_current.get(4, 0.0)),
+            float(self._measured_current.get(3, 0.0)),
+            0.0]))
 
     def _tick_sim(self) -> None:
         self._publish_odom()

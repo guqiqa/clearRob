@@ -60,7 +60,7 @@ MOTOR_PHASE_INDUCTANCE = 1.6     # mH, phase inductance
 MOTOR_HALL_ANGLE       = 120     # degrees, Hall sensor electrical angle
 MOTOR_POLE_PAIRS       = 10      # 20-pole motor → 10 pole pairs
 MOTOR_GEAR_RATIO       = 5.2     # 5.2:1 reduction gearbox
-WHEEL_RADIUS_M       = 0.10   # 200 mm wheel diameter (vendor WheelPID V2 config)
+WHEEL_RADIUS_M       = 0.11   # 220 mm wheel diameter (measured) — was 0.10
 TRACK_WIDTH_M        = 0.45   # 450 mm track width (vendor WheelPID V2 config)
 
 # Velocity limits
@@ -199,7 +199,7 @@ CHASSIS_CORE_DEFAULTS = {
     # Motor hardware
     "pole_pairs": 10,
     "gear_ratio": 5.2,
-    "wheel_radius": 0.10,
+    "wheel_radius": 0.11,
     "track_width": 0.45,
     "motor_ids": [2, 1, 4, 3],      # FL, RL, FR, RR
     "motor_dirs": [-1, -1, 1, 1],   # flipped 2026-08-04 — colleague's [1,1,-1,-1] tested REVERSED; matches Python-port MOTOR_DIRS
@@ -233,17 +233,17 @@ CHASSIS_CORE_DEFAULTS = {
 
     # Wheel speed-loop PI (current mode — RC/manual)
     "wheel_control_mode": "current",
-    "wheel_speed_kp": 0.60,
+    "wheel_speed_kp": 0.80,          # was 0.60 — faster error→current under load
     "wheel_speed_ki": 0.05,
-    "wheel_feedforward_current": 24,
-    "wheel_max_current": 35,
-    "wheel_integral_max_current": 10,
+    "wheel_feedforward_current": 30,
+    "wheel_max_current": 500,           # ×10mA=5.0A; motor needs 4.7A/6.3A per curve
+    "wheel_integral_max_current": 200,  # ×10mA=2.0A; integral was capped at 0.2A → couldn't reach target RPM
 
     # Startup current ramp
-    "wheel_start_initial_current": 55,
-    "wheel_start_step_current": 2,
+    "wheel_start_initial_current": 300,
+    "wheel_start_step_current": 20,
     "wheel_start_step_ms": 200,
-    "wheel_start_max_current": 70,
+    "wheel_start_max_current": 500,     # ×10mA=5.0A; break ground static friction
     "wheel_start_threshold_rpm": 2,
     "wheel_start_confirm_samples": 1,
     "wheel_stall_threshold_rpm": 1,
@@ -316,14 +316,14 @@ CHASSIS_CORE_DEFAULTS = {
     # IMU heading hold
     "imu_heading_enable": True,
     "imu_yaw_sign": -1.0,
-    "imu_calibrate_ms": 3000,
-    "imu_deadband_dps": 0.30,
-    "heading_kp": 1.2,
-    "heading_ki": 0.0,
+    "imu_calibrate_ms": 5000,
+    "imu_deadband_dps": 1.00,
+    "heading_kp": 4.0,          # was 2.0 — faster/stronger correction for 60kg drift
+    "heading_ki": 0.05,         # was 0 — integral eliminates steady-state drift
     "heading_kd": 0.2,
-    "heading_integral_max_correction": 0,
-    "heading_max_correction": 5,
-    "heading_correction_sign": -1,
+    "heading_integral_max_correction": 10,  # was 0
+    "heading_max_correction": 20,   # was 5 — 60kg correction authority
+    "heading_correction_sign": -1,   # REVERSE-correct: right drift needs left-turn (left faster)
     "heading_forward_trim": 0,
     "heading_reverse_trim": 0,
     "heading_reset_steering_hold_ms": 500,
