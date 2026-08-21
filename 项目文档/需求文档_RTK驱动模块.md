@@ -16,11 +16,13 @@
 
 | 参数 | 值 |
 |------|------|
-| 接收机 | NTRIP 高精度 GNSS |
+| 接收机 | 移远 LG29xP 家族（无北斗 → LG290P(03)/LG580P(03) 类） |
 | 设备路径 | `/dev/ttyS2` |
 | 波特率 | 460800 bps |
-| 协议 | NMEA 0183 标准 |
+| 协议 | NMEA 0183 标准（多 talker：`$GPGGA/$GNGGA/$BDGGA` 等） |
 | 读取方式 | 行读取 (以 `\r\n` 分隔) |
+| RTCM 注入 | 同串口双向：`ntrip_enable` 时把 caster 差分 (RTCM3 MSM) 写入模块 UART RX（无 SIM 阶段经 WiFi 拉差分） |
+| 默认坐标系 | WGS84 |
 
 ### 2.1 NMEA 语句格式
 
@@ -129,7 +131,22 @@ rtk_driver:
     simulate: false
     sim_lat: 31.2304     # 上海示例坐标
     sim_lon: 121.4737
+
+    # NTRIP 客户端（无 SIM 阶段用 WiFi/4G 拉差分注入模块 UART）
+    ntrip_enable: false
+    ntrip_host: "203.107.45.154"      # 备用 60.205.8.49
+    ntrip_port: 8002                  # 8002=WGS84(模块默认,推荐) / 8003=CGCS2000
+    ntrip_mount: "AUTO"
+    ntrip_user: "qxr0014590"
+    ntrip_pwd: "5c3dbd6"
+    ntrip_gga_interval: 10            # 秒；VRS 需周期发 GGA
+    ntrip_fallback_lat: 31.2304       # 无定位时 GGA 兜底位置（上海）
+    ntrip_fallback_lon: 121.4737
 ```
+
+> NTRIP 客户端说明：模块无 SIM 时，由 `rtk_driver` 内嵌客户端经网络（WiFi/4G）连接 caster
+> 拉取 RTCM3 差分并写入同一串口（模块 UART RX），模块应用差分后输出 RTK 固定解。
+> VRS 型 caster 需周期发 GGA（默认转发模块实时位置，无定位时用兜底坐标）。
 
 ---
 

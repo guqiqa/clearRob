@@ -1,14 +1,16 @@
 # Execute cleaning (cleaning_actuator Action Server, called by master_controller)
-# --- Goal ---
+# Goal
 uint8            strategy            # 0=COVER 1=SPOT 2=TRACK
 float32          duration_s          # s (0=run until cancelled)
-# --- Result ---
+---
+# Result
 bool             success
 float32          actual_duration     # s
 float32          waste_collected_l   # L
 float32          avg_cleanliness_before
 float32          avg_cleanliness_after
-# --- Feedback ---
+---
+# Feedback
 float32          elapsed_s           # s
 float32          cleanliness_current
 float32          waste_instant_l     # L

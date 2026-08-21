@@ -1,0 +1,15 @@
+[Unit]
+Description=Independent Video Input Frontend
+After=S90cam-service.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/ROS2-clearRob/install/setup.bash && exec ros2 run video_input video_input_node --ros-args --params-file /opt/ROS2-clearRob/install/video_input/share/video_input/config/video_input.yaml'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

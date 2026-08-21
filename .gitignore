@@ -28,6 +28,19 @@ log/
 # Offline packages (large .deb files)
 phase1_deps/
 
+# Third-party tools (large binary/source archives)
+RTKLIB_2.4.3_b34.zip
+RTKLIB_2.4.3_b34/
+
+# Camera probe / debug captures (large video & images)
+camera_probe.h264
+camera_probe.mp4
+camera_preview_probe.h264
+camera_preview_*.jpg
+
+# Accidental SSH known_hosts dump
+.ssh_known_hosts
+
 # IDE
 .vscode/
 .idea/

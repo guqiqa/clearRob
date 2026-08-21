@@ -123,6 +123,9 @@ class RemoteDriverNode(Node):
         self.declare_parameter("ch_btn_estop",  5)   # CH6 SWB — 3-pos: gear select LOW/MID/HIGH
         self.declare_parameter("steering_invert", True)
         self.declare_parameter("throttle_invert", False)  # forward=high→positive
+        # CH1 steering travel is small (~0.33 full throw) on this C7mini —
+        # scale it up so a full stick deflection = full steering authority.
+        self.declare_parameter("steering_gain", 3.0)
 
         g = lambda n: self.get_parameter(n).get_parameter_value()
         self._device   = g("device").string_value
@@ -134,6 +137,7 @@ class RemoteDriverNode(Node):
         self._ch_estop = g("ch_btn_estop").integer_value
         self._steer_inv = g("steering_invert").bool_value
         self._throt_inv = g("throttle_invert").bool_value
+        self._steer_gain = g("steering_gain").double_value
 
         self._pub = self.create_publisher(Joy, "/joy", 10)
         self._running = True
@@ -244,6 +248,8 @@ class RemoteDriverNode(Node):
         throt = sbus_to_axis(channels[self._ch_throt], self._centers[self._ch_throt], self._deadzone)
         if self._steer_inv: steer = -steer
         if self._throt_inv: throt = -throt
+        # Scale up the small CH1 travel so full stick = full steering authority.
+        steer = max(-1.0, min(1.0, steer * self._steer_gain))
         # SWA(CH5) 3-pos: 200=UP(MANUAL), 1000=MID(STANDBY), 1800=DOWN(ESTOP)
         swa = channels[self._ch_start]
         btn_manual = 1 if swa < 700 else 0       # up → MANUAL

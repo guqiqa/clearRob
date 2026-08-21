@@ -1,12 +1,14 @@
 # Execute path following (motion_controller Action Server, called by master_controller)
-# --- Goal ---
+# Goal
 geometry_msgs/PoseStamped[]  waypoints
 float32                      target_velocity    # m/s
-# --- Result ---
+---
+# Result
 bool                         success
 uint32                       completed_waypoints
 float32                      deviation_max      # m
-# --- Feedback ---
+---
+# Feedback
 uint32                       current_waypoint_idx
 float32                      lateral_deviation  # m
 float32                      path_progress      # 0.0~1.0

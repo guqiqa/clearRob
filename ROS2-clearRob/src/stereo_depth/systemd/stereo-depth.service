@@ -1,0 +1,15 @@
+[Unit]
+Description=Stereo Depth SLAM Frontend
+After=video-input.service network-online.target
+Wants=video-input.service network-online.target
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=0
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash && source /opt/ROS2-clearRob/install/setup.bash && exec ros2 run stereo_depth stereo_depth_node --ros-args --params-file /opt/ROS2-clearRob/install/stereo_depth/share/stereo_depth/config/stereo_depth.yaml'
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

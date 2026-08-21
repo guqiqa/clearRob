@@ -221,6 +221,17 @@ rtk_driver:
     sim_lat: 31.2304
     sim_lon: 121.4737
 
+    # NTRIP 客户端（无 SIM 阶段用 WiFi/4G 拉差分注入模块 UART）
+    ntrip_enable: false
+    ntrip_host: "203.107.45.154"      # 备用 60.205.8.49
+    ntrip_port: 8002                  # 8002=WGS84(模块默认,推荐) / 8003=CGCS2000
+    ntrip_mount: "AUTO"
+    ntrip_user: "qxr0014590"
+    ntrip_pwd: "5c3dbd6"
+    ntrip_gga_interval: 10            # 秒；VRS 需周期发 GGA
+    ntrip_fallback_lat: 31.2304       # 无定位时 GGA 兜底位置（上海）
+    ntrip_fallback_lon: 121.4737
+
 # ---- remote_driver ----
 remote_driver:
   ros__parameters:

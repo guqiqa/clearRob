@@ -38,6 +38,7 @@ set(msg_files
   "msg/Alert.msg"
   "msg/RCRawSignal.msg"
   "msg/AppCommand.msg"
+  "msg/StereoDistance.msg"
 )
 
 set(srv_files
@@ -48,6 +49,7 @@ set(srv_files
   "srv/GetCurrentPose.srv"
   "srv/RequestMap.srv"
   "srv/SetScanFreq.srv"
+  "srv/GetStereoDistance.srv"
 )
 
 set(action_files

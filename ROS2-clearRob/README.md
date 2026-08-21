@@ -2,7 +2,7 @@
 
 ## Overview
 
-Based on the [需求文档 V2.5](../项目需求文档/需求文档_V2.5.md), this workspace implements a complete intelligent cleaning robot control system with 9 ROS2 nodes communicating via Topic/Service/Action.
+Based on the [需求文档 V2.5](../项目文档/需求文档_V2.5.md), this workspace implements a complete intelligent cleaning robot control system with 9 ROS2 nodes communicating via Topic/Service/Action.
 
 ## Architecture
 
@@ -34,6 +34,8 @@ control_gateway  →  master_controller  →  motion_controller
 | `motion_controller` | ament_python | Python | 底盘驱动/PID 控制/里程计 |
 | `localization_engine` | ament_python | Python | SLAM 定位/建图/tf2 |
 | `vision_detector` | ament_python | Python | 垃圾检测/清洁度/可通行区域 |
+| `video_input` | ament_python | Python | 独立视频输入/RGB 与双目话题归一化 |
+| `stereo_depth` | ament_python | Python | OpenCV 双目深度/SLAM 稀疏点云 |
 | `cleaning_actuator` | ament_python | Python | 清扫策略执行/尘满检测 |
 | `lidar_perception` | ament_python | Python | 点云预处理/障碍物/急停 |
 | `fusion_engine` | ament_python | Python | 2D+3D 融合/避障决策 |
@@ -79,6 +81,22 @@ ros2 launch cleaning_robot_simulation simulation.launch.py
 ros2 launch cleaning_robot_bringup cleaning_robot.launch.py robot_id:=robot_001 use_namespace:=true
 ros2 launch cleaning_robot_bringup cleaning_robot.launch.py robot_id:=robot_002 use_namespace:=true
 ```
+
+### Independent video input and stereo depth
+
+The camera driver remains `S90cam-service.service`. The optional `video_input` package is the shared ROS2 image frontend: it republishes the configured camera source into stable RGB and left/right stereo topics. `vision_detector` consumes the RGB topic, while `stereo_depth` consumes the left/right topics for SLAM mapping only. Millimeter-wave radar remains the obstacle-avoidance source.
+
+```bash
+# Enable the shared video layer and SLAM depth frontend
+ros2 launch cleaning_robot_bringup cleaning_robot.launch.py \
+  sim_mode:=false use_video_input:=true use_stereo_depth:=true
+
+# Check the depth frontend after deployment
+curl http://127.0.0.1:8091/health
+curl http://127.0.0.1:8091/latest
+```
+
+Set the real camera source topics in `src/video_input/config/video_input.yaml` before enabling the services. The current QSM602HA-GL board exposes a Hobot H.264 preview, but does not yet expose ROS2 left/right image topics; see `项目文档/双目测距与独立视频输入集成说明.md` for the deployment status and required calibration inputs. The current checkerboard target is `7x10` inner corners with `square_size_m: 0.02`.
 
 ## Control Interfaces
 

@@ -1,7 +1,8 @@
 """
 Launch file for the cleaning robot system.
 
-Launches all 9 ROS2 nodes in order with proper parameters.
+Launches the core ROS2 nodes in order with proper parameters.
+Stereo depth is optional and intended for SLAM mapping only.
 
 Usage:
     ros2 launch cleaning_robot_bringup cleaning_robot.launch.py
@@ -49,6 +50,16 @@ def generate_launch_description():
         default_value="info",
         description="ROS2 logging level (debug/info/warn/error/fatal)",
     )
+    use_stereo_depth_arg = DeclareLaunchArgument(
+        "use_stereo_depth",
+        default_value="false",
+        description="Enable lightweight stereo depth frontend for SLAM mapping",
+    )
+    use_video_input_arg = DeclareLaunchArgument(
+        "use_video_input",
+        default_value="false",
+        description="Enable independent video input frontend",
+    )
 
     # ---- Node definitions ----
     # Each node is launched with the default parameter file + any overrides
@@ -90,28 +101,50 @@ def generate_launch_description():
         actions=[make_node("vision_detector", "vision_detector_node")],
     )
 
-    # 6. Fusion engine - needs vision + lidar
+    # 6. Video input - optional independent input layer.
+    video_input_node = GroupAction(
+        condition=IfCondition(LaunchConfiguration("use_video_input")),
+        actions=[
+            TimerAction(
+                period=0.5,
+                actions=[make_node("video_input", "video_input_node")],
+            )
+        ],
+    )
+
+    # 7. Stereo depth - SLAM mapping frontend only.
+    stereo_depth_node = GroupAction(
+        condition=IfCondition(LaunchConfiguration("use_stereo_depth")),
+        actions=[
+            TimerAction(
+                period=2.0,
+                actions=[make_node("stereo_depth", "stereo_depth_node")],
+            )
+        ],
+    )
+
+    # 8. Fusion engine - needs vision + lidar/radar frontend
     fusion_node = TimerAction(
         period=3.0,
         actions=[make_node("fusion_engine", "fusion_engine_node")],
     )
 
-    # 7. Path planner - needs localization + map
+    # 9. Path planner - needs localization + map
     path_planner_node = TimerAction(
         period=2.5,
         actions=[make_node("path_planner", "path_planner_node")],
     )
 
-    # 8. Control gateway - system entry
+    # 10. Control gateway - system entry
     control_gateway_node = make_node("control_gateway", "control_gateway_node")
 
-    # 9. Cleaning actuator - needs strategy + vision
+    # 11. Cleaning actuator - needs strategy + vision
     cleaning_node = TimerAction(
         period=3.5,
         actions=[make_node("cleaning_actuator", "cleaning_actuator_node")],
     )
 
-    # 10. Master controller - system brain, needs all others up first
+    # 12. Master controller - system brain, needs all others up first
     master_node = TimerAction(
         period=4.0,
         actions=[make_node("master_controller", "master_controller_node")],
@@ -123,6 +156,8 @@ def generate_launch_description():
         localization_node,
         lidar_node,
         vision_node,
+        video_input_node,
+        stereo_depth_node,
         fusion_node,
         path_planner_node,
         control_gateway_node,
@@ -138,6 +173,8 @@ def generate_launch_description():
         sim_mode_arg,
         use_namespace_arg,
         log_level_arg,
+        use_video_input_arg,
+        use_stereo_depth_arg,
         # Single-robot: no namespace (condition: use_namespace is false)
         GroupAction(
             condition=UnlessCondition(LaunchConfiguration("use_namespace")),

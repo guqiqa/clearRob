@@ -16,3 +16,5 @@ int32    xmin                # BBox top-left x (pixels, 0-indexed)
 int32    ymin                # BBox top-left y (pixels, 0-indexed)
 int32    xmax                # BBox bottom-right x (pixels, exclusive)
 int32    ymax                # BBox bottom-right y (pixels, exclusive)
+
+float32  depth_m             # Optional true depth at bbox center/ROI (m), 0.0 = unavailable
