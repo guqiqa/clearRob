@@ -17,6 +17,7 @@ Sim mode: simulate:=true — publishes fixed coordinates, no serial read.
 import base64
 import math
 import socket
+import json
 import threading
 import time
 from typing import Optional
@@ -25,6 +26,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix, NavSatStatus
 from std_msgs.msg import Header
+from std_msgs.msg import String
 
 try:
     import serial
@@ -140,6 +142,7 @@ class RtkDriverNode(Node):
         self._ntrip_fallback_lon = self.get_parameter("ntrip_fallback_lon").get_parameter_value().double_value
 
         self._pub_fix = self.create_publisher(NavSatFix, "/fix", 10)
+        self._pub_status = self.create_publisher(String, "/gps/status", 10)
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._ntrip_thread: Optional[threading.Thread] = None
@@ -173,6 +176,8 @@ class RtkDriverNode(Node):
     def _read_loop(self) -> None:
         lat = lon = alt = 0.0
         quality = 0
+        sats = 0
+        hdop = 99.99
         while self._running and rclpy.ok():
             try:
                 line = self._ser.readline().decode('ascii', errors='ignore').strip()
@@ -189,6 +194,8 @@ class RtkDriverNode(Node):
                     try:
                         alt = float(fields[9]) if fields[9] else alt
                         quality = int(fields[6])
+                        sats = int(fields[7]) if fields[7] else sats
+                        hdop = float(fields[8]) if fields[8] else hdop
                     except (ValueError, IndexError):
                         pass
                     if lat != 0.0 and lon != 0.0:
@@ -196,6 +203,7 @@ class RtkDriverNode(Node):
                         self._last_lon = lon
                         self._last_gga_raw = line
                     self._publish_fix(lat, lon, alt, quality)
+                    self._publish_status(quality, sats, hdop, lat, lon, alt)
 
             elif line.startswith('$') and line[3:6] == 'RMC' and nmea_checksum(line):
                 fields = line.split(',')
@@ -205,6 +213,7 @@ class RtkDriverNode(Node):
                     if lat2 != 0.0:
                         lat, lon = lat2, lon2
                         self._publish_fix(lat, lon, alt, quality)
+                        self._publish_status(quality, sats, hdop, lat, lon, alt)
 
     def _ntrip_loop(self) -> None:
         """NTRIP client: pull RTCM3 corrections over network, inject to module UART."""
@@ -307,6 +316,28 @@ class RtkDriverNode(Node):
         fix.status.service = NavSatStatus.SERVICE_GPS
 
         self._pub_fix.publish(fix)
+
+    def _publish_status(
+        self,
+        quality: int,
+        sats: int,
+        hdop: float,
+        lat: float,
+        lon: float,
+        alt: float,
+    ) -> None:
+        msg = String()
+        msg.data = json.dumps({
+            "quality": quality,
+            "satellites": sats,
+            "hdop": round(hdop, 2),
+            "fix_type": "rtk_fixed" if quality >= 4 else ("dgps" if quality >= 2 else "autonomous"),
+            "valid": quality > 0,
+            "latitude": round(lat, 10),
+            "longitude": round(lon, 10),
+            "altitude": round(alt, 3),
+        }, ensure_ascii=False, separators=(",", ":"))
+        self._pub_status.publish(msg)
 
     def _publish_sim(self) -> None:
         self._publish_fix(self._sim_lat, self._sim_lon, 10.0, 4)  # Sim RTK fixed

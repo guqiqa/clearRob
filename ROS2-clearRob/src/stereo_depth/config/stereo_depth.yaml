@@ -3,11 +3,12 @@ stereo_depth:
     # Input topics should be rectified before SGBM. If the camera frontend only
     # provides raw frames, set calibration_file and keep assume_rectified=false
     # so this node performs OpenCV rectification.
-    left_image_topic: "sensor/stereo/left/image_rect"
-    right_image_topic: "sensor/stereo/right/image_rect"
+    left_image_topic: "sensor/stereo/left/image_raw"
+    right_image_topic: "sensor/stereo/right/image_raw"
     left_camera_info_topic: "sensor/stereo/left/camera_info"
     right_camera_info_topic: "sensor/stereo/right/camera_info"
     assume_rectified: false
+    require_calibration: true
     calibration_file: ""
     checkerboard_cols: 7
     checkerboard_rows: 10
@@ -16,8 +17,8 @@ stereo_depth:
     # QSM602HA-GL has limited shared compute, so defaults favor SLAM utility
     # over dense high-FPS depth.
     target_fps: 5.0
-    compute_width: 640
-    compute_height: 360
+    compute_width: 544
+    compute_height: 640
     publish_depth: true
     publish_aligned_depth_compat: true
     publish_disparity: true
@@ -41,12 +42,12 @@ stereo_depth:
     disp12_max_diff: 1
 
     # Main distance ROI, centered by default.
-    roi_x: 288
-    roi_y: 150
+    roi_x: 240
+    roi_y: 290
     roi_width: 64
     roi_height: 60
     min_valid_ratio: 0.05
-    max_pair_time_diff_ms: 80.0
+    max_pair_time_diff_ms: 5.0
 
     # HTTP/WebSocket lightweight debug API.
     enable_http: true

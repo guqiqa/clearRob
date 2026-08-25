@@ -60,6 +60,11 @@ def generate_launch_description():
         default_value="false",
         description="Enable independent video input frontend",
     )
+    use_native_stereo_camera_arg = DeclareLaunchArgument(
+        "use_native_stereo_camera",
+        default_value="false",
+        description="Enable native QSM602HA VIN stereo frontend",
+    )
 
     # ---- Node definitions ----
     # Each node is launched with the default parameter file + any overrides
@@ -112,6 +117,16 @@ def generate_launch_description():
         ],
     )
 
+    native_stereo_camera_node = GroupAction(
+        condition=IfCondition(LaunchConfiguration("use_native_stereo_camera")),
+        actions=[
+            TimerAction(
+                period=0.5,
+                actions=[make_node("native_stereo_camera", "native_stereo_camera_node")],
+            )
+        ],
+    )
+
     # 7. Stereo depth - SLAM mapping frontend only.
     stereo_depth_node = GroupAction(
         condition=IfCondition(LaunchConfiguration("use_stereo_depth")),
@@ -157,6 +172,7 @@ def generate_launch_description():
         lidar_node,
         vision_node,
         video_input_node,
+        native_stereo_camera_node,
         stereo_depth_node,
         fusion_node,
         path_planner_node,
@@ -174,6 +190,7 @@ def generate_launch_description():
         use_namespace_arg,
         log_level_arg,
         use_video_input_arg,
+        use_native_stereo_camera_arg,
         use_stereo_depth_arg,
         # Single-robot: no namespace (condition: use_namespace is false)
         GroupAction(

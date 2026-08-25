@@ -1,0 +1,22 @@
+[Unit]
+Description=QSM602HA Native Stereo Camera ROS2 Frontend
+After=network-online.target S90cam-service.service camera-preview.service bestmow-stereo-h264.service bestmow-s100p-sender.service
+Wants=network-online.target
+Conflicts=S90cam-service.service camera-preview.service bestmow-stereo-h264.service bestmow-s100p-sender.service
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=0
+Environment=HOME=/root
+Environment=ROS_LOG_DIR=/root/.ros/log
+Environment=PATH=/app/bin:/middleware/bin:/usr/hobot/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=LD_LIBRARY_PATH=/opt/bestmow/native_camera/releases/20260820-x5-native-v1/out:/app/lib:/app/pub/lib:/middleware/lib:/middleware/pub/lib:/usr/hobot/lib:/usr/hobot/lib/sensor:/system/lib:/system/usr/lib:/lib
+ExecStartPre=/bin/bash -c 'for i in {1..20}; do if ! pgrep -f "(/usr/hobot/bin/[c]am-service|[m]ulti_pipe_vin_isp_vse|[c]amera-preview)" >/dev/null; then exit 0; fi; sleep 0.5; done; echo "camera pipeline is still owned by another process" >&2; exit 1'
+ExecStart=/bin/bash -lc '. /etc/profile.d/environment.sh && source /opt/ros/humble/setup.bash && source /root/cleaning_robot_ws/install/setup.bash && exec ros2 launch native_stereo_camera native_stereo_camera.launch.py'
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=15
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

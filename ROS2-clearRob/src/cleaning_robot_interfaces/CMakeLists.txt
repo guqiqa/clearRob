@@ -39,6 +39,7 @@ set(msg_files
   "msg/RCRawSignal.msg"
   "msg/AppCommand.msg"
   "msg/StereoDistance.msg"
+  "msg/StereoFrameStatus.msg"
 )
 
 set(srv_files

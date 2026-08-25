@@ -16,6 +16,7 @@ setup(
         (os.path.join("share", package_name, "config"), glob("config/*.yaml")),
         (os.path.join("share", package_name, "launch"), glob("launch/*.py")),
         (os.path.join("share", package_name, "systemd"), glob("systemd/*.service")),
+        (os.path.join("share", package_name, "tools"), glob("tools/*.py")),
     ],
     install_requires=["setuptools"],
     zip_safe=True,

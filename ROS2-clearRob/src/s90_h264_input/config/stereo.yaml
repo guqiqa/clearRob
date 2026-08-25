@@ -1,0 +1,21 @@
+s90_h264_left:
+  ros__parameters:
+    url: "http://127.0.0.1:8081/left.h264"
+    output_topic: "camera_native/left/image_raw"
+    frame_id: "stereo_left_camera_optical_frame"
+    reconnect_s: 1.0
+    max_fps: 5.0
+    output_width: 544
+    output_height: 640
+    output_encoding: "mono8"
+
+s90_h264_right:
+  ros__parameters:
+    url: "http://127.0.0.1:8081/right.h264"
+    output_topic: "camera_native/right/image_raw"
+    frame_id: "stereo_right_camera_optical_frame"
+    reconnect_s: 1.0
+    max_fps: 5.0
+    output_width: 544
+    output_height: 640
+    output_encoding: "mono8"

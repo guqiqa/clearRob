@@ -19,6 +19,7 @@
   <exec_depend>lidar_perception</exec_depend>
   <exec_depend>fusion_engine</exec_depend>
   <exec_depend>video_input</exec_depend>
+  <exec_depend>native_stereo_camera</exec_depend>
   <exec_depend>stereo_depth</exec_depend>
   <exec_depend>cleaning_robot_interfaces</exec_depend>
 

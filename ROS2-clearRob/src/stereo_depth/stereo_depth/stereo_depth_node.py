@@ -88,6 +88,7 @@ class StereoDepthNode(Node):
             self._calibration = self._load_calibration(
                 str(self.get_parameter("calibration_file").value)
             )
+        self._require_calibration = bool(self.get_parameter("require_calibration").value)
 
         sensor_qos = QoSProfile(
             depth=5,
@@ -172,18 +173,19 @@ class StereoDepthNode(Node):
 
     def _declare_parameters(self) -> None:
         p = self.declare_parameter
-        p("left_image_topic", "sensor/stereo/left/image_rect")
-        p("right_image_topic", "sensor/stereo/right/image_rect")
+        p("left_image_topic", "sensor/stereo/left/image_raw")
+        p("right_image_topic", "sensor/stereo/right/image_raw")
         p("left_camera_info_topic", "sensor/stereo/left/camera_info")
         p("right_camera_info_topic", "sensor/stereo/right/camera_info")
         p("assume_rectified", True)
+        p("require_calibration", True)
         p("calibration_file", "")
         p("checkerboard_cols", 7)
         p("checkerboard_rows", 10)
         p("square_size_m", 0.02)
         p("target_fps", 5.0)
-        p("compute_width", 640)
-        p("compute_height", 360)
+        p("compute_width", 544)
+        p("compute_height", 640)
         p("publish_depth", True)
         p("publish_aligned_depth_compat", True)
         p("publish_disparity", True)
@@ -205,7 +207,7 @@ class StereoDepthNode(Node):
         p("roi_width", 64)
         p("roi_height", 60)
         p("min_valid_ratio", 0.05)
-        p("max_pair_time_diff_ms", 80.0)
+        p("max_pair_time_diff_ms", 5.0)
         p("enable_http", True)
         p("http_host", "0.0.0.0")
         p("http_port", 8091)
@@ -232,6 +234,10 @@ class StereoDepthNode(Node):
     def _compute_tick(self) -> None:
         if not _HAS_CV2:
             self._set_fault("OpenCV is not available")
+            return
+
+        if self._require_calibration and not self.get_parameter("simulate_input").value and self._calibration is None:
+            self._set_fault("stereo calibration is required before real depth computation")
             return
 
         timeout_s = float(self.get_parameter("status_timeout_s").value)
@@ -267,11 +273,11 @@ class StereoDepthNode(Node):
         if self._left_msg is None or self._right_msg is None:
             return None, None, self._make_header()
 
-        max_pair_dt = float(self.get_parameter("max_pair_time_diff_ms").value) / 1000.0
-        if max_pair_dt > 0.0:
-            pair_dt = abs(self._left_recv_time - self._right_recv_time)
-            if pair_dt > max_pair_dt:
-                return None, None, self._make_header()
+        max_pair_dt_ns = int(float(self.get_parameter("max_pair_time_diff_ms").value) * 1e6)
+        left_stamp_ns = int(self._left_msg.header.stamp.sec) * 1000000000 + int(self._left_msg.header.stamp.nanosec)
+        right_stamp_ns = int(self._right_msg.header.stamp.sec) * 1000000000 + int(self._right_msg.header.stamp.nanosec)
+        if max_pair_dt_ns > 0 and abs(left_stamp_ns - right_stamp_ns) > max_pair_dt_ns:
+            return None, None, self._make_header()
 
         left = self._image_to_gray(self._left_msg)
         right = self._image_to_gray(self._right_msg)

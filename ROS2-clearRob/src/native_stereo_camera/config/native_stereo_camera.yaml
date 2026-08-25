@@ -1,0 +1,22 @@
+native_stereo_camera:
+  ros__parameters:
+    left_topic: "camera_native/left/image_raw"
+    right_topic: "camera_native/right/image_raw"
+    status_topic: "camera_native/stereo/status"
+    left_frame_id: "stereo_left_camera_optical_frame"
+    right_frame_id: "stereo_right_camera_optical_frame"
+    left_sensor_index: 1
+    right_sensor_index: 0
+    left_output_stream_id: 1
+    right_output_stream_id: 2
+    left_gdc_file: "/opt/bestmow/native_camera/releases/20260820-x5-native-v1/config/camera/SC132GS_V2/gdc/SC132GS_V2_left_gdc.bin"
+    right_gdc_file: "/opt/bestmow/native_camera/releases/20260820-x5-native-v1/config/camera/SC132GS_V2/gdc/SC132GS_V2_right_gdc.bin"
+    width: 1088
+    height: 1280
+    sensor_fps: 30
+    output_fps: 30
+    publish_fps: 15
+    pool_capacity: 16
+    reader_queue_capacity: 8
+    max_pair_delta_ms: 5.0
+    ready_timeout_s: 20.0

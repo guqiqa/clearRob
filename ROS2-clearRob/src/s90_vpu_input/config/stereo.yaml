@@ -1,0 +1,23 @@
+s90_vpu_input:
+  ros__parameters:
+    left_source: "http://127.0.0.1:8081/left.h264"
+    right_source: "http://127.0.0.1:8081/right.h264"
+    left_topic: "camera_native/left/image_raw"
+    right_topic: "camera_native/right/image_raw"
+    status_topic: "camera_native/stereo/status"
+    left_frame_id: "stereo_left_camera_optical_frame"
+    right_frame_id: "stereo_right_camera_optical_frame"
+    source_width: 1088
+    source_height: 1280
+    output_width: 544
+    output_height: 640
+    max_fps: 5.0
+    reconnect_s: 1.0
+    max_pair_delta_ms: 5.0
+    max_pair_age_ms: 200.0
+    input_chunk_bytes: 65536
+    bitstream_buffer_bytes: 1048576
+    bitstream_buffer_count: 4
+    frame_buffer_count: 4
+    enable_vpu: false
+    require_vpu_v4l2: true

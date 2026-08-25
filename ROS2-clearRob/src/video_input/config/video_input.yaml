@@ -2,23 +2,26 @@ video_input:
   ros__parameters:
     # Source topics are deployment-specific. The node republishes them into the
     # stable system topics consumed by vision_detector and stereo_depth.
-    source_rgb_image_topic: ""
+    source_rgb_image_topic: "camera_native/left/image_raw"
     source_rgb_camera_info_topic: ""
-    source_left_image_topic: ""
+    source_left_image_topic: "camera_native/left/image_raw"
     source_left_camera_info_topic: ""
-    source_right_image_topic: ""
+    source_right_image_topic: "camera_native/right/image_raw"
     source_right_camera_info_topic: ""
+    source_left_h264_url: ""
+    source_right_h264_url: ""
+    h264_reconnect_s: 1.0
 
     output_rgb_image_topic: "sensor/camera/image_raw"
     output_rgb_camera_info_topic: "sensor/camera/camera_info"
-    output_left_image_topic: "sensor/stereo/left/image_rect"
+    output_left_image_topic: "sensor/stereo/left/image_raw"
     output_left_camera_info_topic: "sensor/stereo/left/camera_info"
-    output_right_image_topic: "sensor/stereo/right/image_rect"
+    output_right_image_topic: "sensor/stereo/right/image_raw"
     output_right_camera_info_topic: "sensor/stereo/right/camera_info"
 
     publish_rgb_from_left: true
     publish_rgb_from_source: true
-    target_fps: 30.0
+    target_fps: 15.0
     simulate_input: false
     simulate_width: 1280
     simulate_height: 720

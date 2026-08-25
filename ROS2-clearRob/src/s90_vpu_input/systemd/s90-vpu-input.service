@@ -1,0 +1,18 @@
+[Unit]
+Description=S90 stereo H264 to ROS2 images using Hobot VPU
+After=S90cam-service.service bestmow-stereo-h264.service network-online.target
+Requires=S90cam-service.service bestmow-stereo-h264.service
+Conflicts=native-stereo-camera.service camera-preview.service
+
+[Service]
+Type=simple
+Environment=ROS_DOMAIN_ID=0
+Environment=ROS_LOG_DIR=/root/.ros/log
+ExecStart=/bin/bash -lc 'source /opt/ros/humble/setup.bash && source /root/cleaning_robot_ws/install/setup.bash && exec ros2 launch s90_vpu_input stereo.launch.py'
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=10
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

@@ -5,13 +5,19 @@ Independent video input frontend.
 This node only handles camera ingest, normalization, and caching. It republishes
 stable topics that downstream modules consume:
 - vision_detector -> sensor/camera/image_raw
-- stereo_depth -> sensor/stereo/left/right/image_rect and camera_info
+- stereo preprocessing/depth -> sensor/stereo/left/right/image_raw
 """
 
 import time
+import threading
 from typing import Optional
 
 import numpy as np
+
+try:
+    import cv2
+except ImportError:  # pragma: no cover - board runtime dependency
+    cv2 = None
 
 import rclpy
 from rclpy.node import Node
@@ -128,6 +134,7 @@ class VideoInputNode(Node):
                 self._on_right_info,
                 info_qos,
             )
+            self._start_h264_sources()
 
         target_fps = max(float(self.get_parameter("target_fps").value), 1.0)
         self.create_timer(1.0 / target_fps, self._timer_tick)
@@ -147,11 +154,16 @@ class VideoInputNode(Node):
         p("source_left_camera_info_topic", "")
         p("source_right_image_topic", "")
         p("source_right_camera_info_topic", "")
+        # Optional S90 fallback. These streams are for video bring-up and
+        # must be replaced by timestamped native ROS2 frames for formal depth.
+        p("source_left_h264_url", "")
+        p("source_right_h264_url", "")
+        p("h264_reconnect_s", 1.0)
         p("output_rgb_image_topic", "sensor/camera/image_raw")
         p("output_rgb_camera_info_topic", "sensor/camera/camera_info")
-        p("output_left_image_topic", "sensor/stereo/left/image_rect")
+        p("output_left_image_topic", "sensor/stereo/left/image_raw")
         p("output_left_camera_info_topic", "sensor/stereo/left/camera_info")
-        p("output_right_image_topic", "sensor/stereo/right/image_rect")
+        p("output_right_image_topic", "sensor/stereo/right/image_raw")
         p("output_right_camera_info_topic", "sensor/stereo/right/camera_info")
         p("publish_rgb_from_left", True)
         p("publish_rgb_from_source", True)
@@ -188,8 +200,61 @@ class VideoInputNode(Node):
                 "source_left_camera_info_topic",
                 "source_right_image_topic",
                 "source_right_camera_info_topic",
+                "source_left_h264_url",
+                "source_right_h264_url",
             )
         )
+
+    def _start_h264_sources(self) -> None:
+        if cv2 is None:
+            if self.get_parameter("source_left_h264_url").value or self.get_parameter("source_right_h264_url").value:
+                self._set_fault("OpenCV is required for H264 camera sources")
+            return
+        for eye, name in (("left", "source_left_h264_url"), ("right", "source_right_h264_url")):
+            url = str(self.get_parameter(name).value)
+            if not url:
+                continue
+            thread = threading.Thread(target=self._h264_capture_loop, args=(eye, url), daemon=True)
+            thread.start()
+
+    def _h264_capture_loop(self, eye: str, url: str) -> None:
+        reconnect_s = max(float(self.get_parameter("h264_reconnect_s").value), 0.1)
+        while rclpy.ok():
+            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            if not cap.isOpened():
+                self._set_fault(f"cannot open {eye} H264 source: {url}")
+                cap.release()
+                time.sleep(reconnect_s)
+                continue
+            self.get_logger().info(f"opened {eye} H264 source: {url}")
+            frame_count = 0
+            while rclpy.ok():
+                ok, frame = cap.read()
+                if not ok or frame is None:
+                    self.get_logger().warning(f"{eye} H264 read ended after {frame_count} frames")
+                    break
+                frame_count += 1
+                self._publish_h264_frame(eye, frame)
+                self._fault_reason = ""
+            cap.release()
+            time.sleep(reconnect_s)
+
+    def _publish_h264_frame(self, eye: str, frame: np.ndarray) -> None:
+        # H264 has no sensor timestamp. Publish decoded frames independently;
+        # this path is for video bring-up, not formal stereo synchronization.
+        msg = self._make_image(frame, "bgr8")
+        msg.header.stamp = self.get_clock().now().to_msg()
+        now = time.monotonic()
+        if eye == "left":
+            self._latest_left = msg
+            self._last_left_time = now
+            self._pub_left.publish(msg)
+            if bool(self.get_parameter("publish_rgb_from_left").value):
+                self._pub_rgb.publish(msg)
+        else:
+            self._latest_right = msg
+            self._last_right_time = now
+            self._pub_right.publish(msg)
 
     def _on_rgb_image(self, msg: Image) -> None:
         self._latest_rgb = msg
