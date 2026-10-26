@@ -53,3 +53,14 @@ Thumbs.db
 venv/
 .venv/
 env/
+artifacts/
+archive/
+*.pt
+*.tar.gz
+*.whl
+*.deb
+*.pack
+
+# datasets / calibration captures / temp
+calibration_sessions/
+tmp/
