@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  四轮差速小车控制配置
+  电流单位：10 mA/count；速度单位：车轮 RPM；时间单位：ms。
+  本文件仅保留当前 main.cpp 实际读取的参数，避免旧参数看似修改但不生效。
+-->
+<DeviceConfig version="2.2">
+
+  <!-- 1. 硬件接口 -->
+  <SBus_Port>/dev/ttyS5</SBus_Port>
+  <Can_Port>can0</Can_Port>
+
+  <!-- 2. 基础运动和弧线转向 -->
+  <Run_RPM>150</Run_RPM>
+  <Rotate_RPM>70</Rotate_RPM>
+  <ROS_Speed_Mode_Enable>1</ROS_Speed_Mode_Enable>
+  <ROS_Max_Linear_mps>0.15</ROS_Max_Linear_mps>
+  <ROS_Max_Angular_radps>0.60</ROS_Max_Angular_radps>
+    <ROS_SafeCommand_Enable>1</ROS_SafeCommand_Enable>
+    <ROS_Legacy_CmdVel_Enable>0</ROS_Legacy_CmdVel_Enable>
+    <ROS_SafeCommand_Max_TTL_s>0.20</ROS_SafeCommand_Max_TTL_s>
+    <ROS_ChassisState_Rate_Hz>20.0</ROS_ChassisState_Rate_Hz>
+  <Turn_Max_RPM>110</Turn_Max_RPM>
+  <Turn_Inner_Ratio>0.2</Turn_Inner_Ratio>
+  <Arc_Turn_Blend_ms>0</Arc_Turn_Blend_ms>
+  <Arc_Turn_YawRate_Kp>0.35</Arc_Turn_YawRate_Kp>
+  <Arc_Turn_YawRate_Max_Boost_RPM>50</Arc_Turn_YawRate_Max_Boost_RPM>
+  <Arc_Turn_Min_Inner_RPM>-30</Arc_Turn_Min_Inner_RPM>
+  <!-- 以下三项为 0 时使用通用轮速电流限制。 -->
+  <Arc_Turn_Max_Current>1000</Arc_Turn_Max_Current>
+  <Arc_Turn_Start_Max_Current>1000</Arc_Turn_Start_Max_Current>
+  <Arc_Turn_Inner_Reverse_Hold_Current>0</Arc_Turn_Inner_Reverse_Hold_Current>
+
+  <!-- 3. 原地旋转 -->
+  <Rotate_In_Place_Enable>1</Rotate_In_Place_Enable>
+  <Rotate_Direction_Sign>1</Rotate_Direction_Sign>
+  <Rotate_Factory_Current_Control_Enable>1</Rotate_Factory_Current_Control_Enable>
+  <Rotate_Neutral_Hold_ms>150</Rotate_Neutral_Hold_ms>
+  <Rotate_Speed_Guard_Enable>1</Rotate_Speed_Guard_Enable>
+  <Rotate_Start_Max_RPM>25</Rotate_Start_Max_RPM>
+  <Rotate_Start_Guard_Timeout_ms>1200</Rotate_Start_Guard_Timeout_ms>
+
+  <!-- 4. 轮速闭环、电流限制和制动 -->
+  <Speed_Accel_RPM_s>140</Speed_Accel_RPM_s>
+  <Reverse_Speed_Accel_RPM_s>120</Reverse_Speed_Accel_RPM_s>
+  <Speed_Decel_RPM_s>260</Speed_Decel_RPM_s>
+  <Wheel_Control_Mode>speed</Wheel_Control_Mode>
+  <Wheel_Speed_Kp>0.60</Wheel_Speed_Kp>
+  <Wheel_Speed_Ki>0.05</Wheel_Speed_Ki>
+  <Wheel_Feedforward_Current>60</Wheel_Feedforward_Current>
+  <Wheel_Max_Current>1500</Wheel_Max_Current>
+  <Reverse_Wheel_Max_Current>0</Reverse_Wheel_Max_Current>
+  <Rotate_Max_Current>1500</Rotate_Max_Current>
+  <Wheel_Integral_Max_Current>10</Wheel_Integral_Max_Current>
+  <Wheel_Start_Initial_Current>120</Wheel_Start_Initial_Current>
+  <Wheel_Start_Step_Current>4</Wheel_Start_Step_Current>
+  <Wheel_Start_Step_ms>200</Wheel_Start_Step_ms>
+  <Wheel_Start_Max_Current>1500</Wheel_Start_Max_Current>
+  <Wheel_Start_Kick_ms>200</Wheel_Start_Kick_ms>
+  <Left_Current_Gain>1.0</Left_Current_Gain>
+  <Right_Current_Gain>1.0</Right_Current_Gain>
+  <!-- Per-wheel speed calibration; positive means increase wheel speed magnitude. -->
+  <Wheel_FL_Speed_Trim_RPM>0</Wheel_FL_Speed_Trim_RPM>
+  <Wheel_RL_Speed_Trim_RPM>0</Wheel_RL_Speed_Trim_RPM>
+  <Wheel_FR_Speed_Trim_RPM>0</Wheel_FR_Speed_Trim_RPM>
+  <Wheel_RR_Speed_Trim_RPM>0</Wheel_RR_Speed_Trim_RPM>
+  <Wheel_Diff_Current_Per_RPM>0.0</Wheel_Diff_Current_Per_RPM>
+  <Wheel_Diff_Max_Current>0</Wheel_Diff_Max_Current>
+  <Wheel_Diff_Feedback_Current_Per_RPM>0.0</Wheel_Diff_Feedback_Current_Per_RPM>
+  <Wheel_Diff_Feedback_Max_Current>0</Wheel_Diff_Feedback_Max_Current>
+  <Wheel_Start_Threshold_RPM>2</Wheel_Start_Threshold_RPM>
+  <Wheel_Start_Confirm_Samples>1</Wheel_Start_Confirm_Samples>
+  <Wheel_Stall_Threshold_RPM>1</Wheel_Stall_Threshold_RPM>
+  <Wheel_Stall_Confirm_Samples>3</Wheel_Stall_Confirm_Samples>
+  <Wheel_Start_Timeout_ms>7000</Wheel_Start_Timeout_ms>
+  <Wheel_Overspeed_RPM>220</Wheel_Overspeed_RPM>
+  <Speed_Feedback_Timeout_ms>5000</Speed_Feedback_Timeout_ms>
+  <Brake_Enable>1</Brake_Enable>
+  <Stop_Brake_Window_ms>1800</Stop_Brake_Window_ms>
+  <Brake_Current>70</Brake_Current>
+  <Brake_Release_RPM>1.5</Brake_Release_RPM>
+  <Drive_Light_Brake_Current>0</Drive_Light_Brake_Current>
+  <Reverse_Drive_Light_Brake_Current>0</Reverse_Drive_Light_Brake_Current>
+  <Drive_Light_Brake_Overspeed_RPM>4.0</Drive_Light_Brake_Overspeed_RPM>
+  <Reverse_Drive_Light_Brake_Overspeed_RPM>0.0</Reverse_Drive_Light_Brake_Overspeed_RPM>
+
+  <!-- 5. 割草电机；当前程序按电流控制读取该值。 -->
+  <Cut_Speed>0</Cut_Speed>
+
+  <!-- 6. SBUS通道和三档速度 -->
+  <Low_Threshold>800</Low_Threshold>
+  <High_Threshold>1199</High_Threshold>
+  <Throttle_Channel>3</Throttle_Channel>
+  <Steering_Channel>4</Steering_Channel>
+  <Mower_Channel>2</Mower_Channel>
+  <Gear_Channel>6</Gear_Channel>
+  <Gear_Select_Enable>1</Gear_Select_Enable>
+  <Gear_Low_Run_RPM>70</Gear_Low_Run_RPM>
+  <Gear_Low_Turn_Max_RPM>70</Gear_Low_Turn_Max_RPM>
+  <Gear_Mid_Run_RPM>110</Gear_Mid_Run_RPM>
+  <Gear_Mid_Turn_Max_RPM>110</Gear_Mid_Turn_Max_RPM>
+  <Gear_High_Run_RPM>160</Gear_High_Run_RPM>
+  <Gear_High_Turn_Max_RPM>160</Gear_High_Turn_Max_RPM>
+
+  <!-- 7. 控制周期和通信超时 -->
+  <Failsafe_ms>300</Failsafe_ms>
+  <Heartbeat_ms>200</Heartbeat_ms>
+  <Control_ms>20</Control_ms>
+  <Speed_Query_ms>50</Speed_Query_ms>
+  <Speed_Log_ms>250</Speed_Log_ms>
+
+  <!-- 8. 车辆几何和里程计 -->
+  <Pole_Pairs>10</Pole_Pairs>
+  <Gear_Ratio>4.5</Gear_Ratio>
+  <Wheel_Radius_m>0.1034</Wheel_Radius_m>
+  <Track_Width_m>0.45</Track_Width_m>
+  <Odom_Log_Enable>1</Odom_Log_Enable>
+  <Odom_Log_Path>odometry.csv</Odom_Log_Path>
+
+  <!-- 9. IMU航向保持 -->
+  <IMU_Heading_Enable>1</IMU_Heading_Enable>
+  <IMU_Device>/sys/bus/iio/devices/iio:device0</IMU_Device>
+  <IMU_Axis>z</IMU_Axis>
+  <IMU_Yaw_Sign>-1</IMU_Yaw_Sign>
+  <IMU_Calibrate_ms>3000</IMU_Calibrate_ms>
+  <IMU_Deadband_dps>0.30</IMU_Deadband_dps>
+  <IMU_Max_Rate_dps>180</IMU_Max_Rate_dps>
+  <IMU_Max_Yaw_Step_Deg>4</IMU_Max_Yaw_Step_Deg>
+  <Heading_Kp>0.8</Heading_Kp>
+  <Heading_Ki>0.0</Heading_Ki>
+  <Heading_Kd>0.1</Heading_Kd>
+  <Heading_Integral_Max_Correction>3</Heading_Integral_Max_Correction>
+  <Heading_Max_Correction>3</Heading_Max_Correction>
+  <Reverse_Heading_Max_Correction>0</Reverse_Heading_Max_Correction>
+  <Heading_Correction_Sign>-1</Heading_Correction_Sign>
+  <Heading_Reverse_Correction_Sign>-1</Heading_Reverse_Correction_Sign>
+  <Heading_Min_Correction_Error_Deg>0.0</Heading_Min_Correction_Error_Deg>
+  <Reverse_Heading_Min_Correction_Error_Deg>0.0</Reverse_Heading_Min_Correction_Error_Deg>
+  <Heading_Min_Correction_RPM>0</Heading_Min_Correction_RPM>
+  <Reverse_Heading_Min_Correction_RPM>0</Reverse_Heading_Min_Correction_RPM>
+  <Heading_Error_Boost_Kp>0.0</Heading_Error_Boost_Kp>
+  <Reverse_Heading_Error_Boost_Kp>0.0</Reverse_Heading_Error_Boost_Kp>
+  <Heading_Correction_Slew_RPM_Per_Cycle>1</Heading_Correction_Slew_RPM_Per_Cycle>
+  <Reverse_Heading_Correction_Slew_RPM_Per_Cycle>0</Reverse_Heading_Correction_Slew_RPM_Per_Cycle>
+  <Heading_Forward_Trim>0</Heading_Forward_Trim>
+  <Heading_Reverse_Trim>0</Heading_Reverse_Trim>
+  <Reverse_Left_Target_Trim_RPM>0.0</Reverse_Left_Target_Trim_RPM>
+  <Reverse_Right_Target_Trim_RPM>0.0</Reverse_Right_Target_Trim_RPM>
+  <Heading_Reset_Steering_Hold_ms>500</Heading_Reset_Steering_Hold_ms>
+  <Heading_Startup_Hold_ms>500</Heading_Startup_Hold_ms>
+  <Lateral_Hold_Enable>0</Lateral_Hold_Enable>
+  <Lateral_Kp_Deg_Per_M>0</Lateral_Kp_Deg_Per_M>
+  <Lateral_Max_Heading_Deg>0</Lateral_Max_Heading_Deg>
+  <Lateral_Diff_Kp_RPM_Per_M>0.0</Lateral_Diff_Kp_RPM_Per_M>
+  <Lateral_Diff_Max_RPM>0</Lateral_Diff_Max_RPM>
+  <Lateral_Diff_Slew_RPM_Per_Cycle>0</Lateral_Diff_Slew_RPM_Per_Cycle>
+
+  <!-- 10. 前后方向切换保护 -->
+  <Direction_Change_Hold_Enable>1</Direction_Change_Hold_Enable>
+  <Direction_Change_Stop_RPM>5</Direction_Change_Stop_RPM>
+  <Direction_Change_Hold_Timeout_ms>500</Direction_Change_Hold_Timeout_ms>
+  <Direction_Change_Post_Hold_ms>100</Direction_Change_Post_Hold_ms>
+  <Direction_Change_Post_Max_Diff_RPM>4</Direction_Change_Post_Max_Diff_RPM>
+
+  <!-- 11. 电机ID和安装方向：FL左前、RL左后、FR右前、RR右后。
+       实车核对依据（2026-10-21，顶车单轮 5 秒前进测试，can0）：
+         * 物理左前轮 = CAN ID 2；物理左后轮 = CAN ID 1（左侧两路 ID 与旧配置交叉）；
+         * 物理右前轮 = CAN ID 4；物理右后轮 = CAN ID 3。
+         * 旧配置 FL_ID=1 / RL_ID=2 会把“FL”指令发到左后轮，故此处交换为 FL_ID=2 / RL_ID=1。
+       方向系数按“前进 = 逻辑负转速”约定逐轮目视核对：
+         * ID1(左后) Dir=-1；ID2(左前) Dir=-1；ID4(右前) Dir=-1；ID3(右后) Dir=+1。
+       注意：控制器对命令和反馈同时乘 Dir，因此单看轮速回读无法判断真实转向，
+             修改本段 ID/Dir 后必须顶车逐轮复测（脚本 /root/motor_fwd_test.py）。 -->
+  <!-- 2026-10-25: 原地转向+直行测试确认左右轮组物理装反，FL/RL 与 FR/RR 的 ID+Dir 已对调（旧注释左右标注有误） -->
+  <FL_ID>4</FL_ID>
+  <RL_ID>3</RL_ID>
+  <FR_ID>2</FR_ID>
+  <RR_ID>1</RR_ID>
+  <Mower_ID>5</Mower_ID>
+  <FL_Dir>-1</FL_Dir>
+  <RL_Dir>1</RL_Dir>
+  <FR_Dir>-1</FR_Dir>
+  <RR_Dir>-1</RR_Dir>
+
+  <!-- 12. APP网页控制 -->
+  <App_Control_Enable>1</App_Control_Enable>
+  <App_UDP_Port>8091</App_UDP_Port>
+  <App_Timeout_ms>300</App_Timeout_ms>
+
+  <!-- 13. 日志 -->
+  <ShowLog>1</ShowLog>
+
+</DeviceConfig>

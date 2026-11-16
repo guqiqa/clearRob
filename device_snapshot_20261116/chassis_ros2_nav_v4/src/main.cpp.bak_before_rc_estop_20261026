@@ -1,0 +1,3685 @@
+// ============================================================================
+// Laifei four-wheel chassis controller.
+//
+// File map:
+//   1. Configuration and parameter parsing
+//   2. SBUS / CAN / IMU / odometry interfaces
+//   3. In-place rotation control (frozen behavior)
+//   4. Moving-turn arc mixer (throttle priority)
+//   5. Four-wheel speed loop and safety stop
+//   6. Main loop, remote input, and logging
+//
+// This cleanup adds comments and documentation only. Control behavior is unchanged.
+// All source and text files use UTF-8 encoding.
+// ============================================================================
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cctype>
+#include <cmath>
+#include <csignal>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <cerrno>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <mutex>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <thread>
+
+#include <asm/termbits.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+#include <linux/can.h>
+#include <linux/can/raw.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+
+#include <rclcpp/rclcpp.hpp>
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <std_srvs/srv/set_bool.hpp>
+#include <tf2_ros/transform_broadcaster.h>
+
+#include <navigation_interfaces/msg/chassis_state.hpp>
+#include <navigation_interfaces/msg/safe_motion_command.hpp>
+
+#include "odometry.h"
+
+namespace {
+std::atomic<bool> running{true};
+
+void signalHandler(int) { running = false; }
+
+// Send readiness and watchdog heartbeats directly to systemd without adding a
+// libsystemd link dependency to the controller binary.
+void notifySystemd(const char* message) {
+    const char* socket_path = std::getenv("NOTIFY_SOCKET");
+    if (!socket_path || socket_path[0] == '\0') return;
+    sockaddr_un address{};
+    address.sun_family = AF_UNIX;
+    std::string path = socket_path;
+    if (path[0] == '@') {
+        address.sun_path[0] = '\0';
+        path.erase(0, 1);
+    }
+    if (path.size() >= sizeof(address.sun_path)) return;
+    std::memcpy(address.sun_path + (socket_path[0] == '@' ? 1 : 0),
+                path.data(), path.size());
+    const socklen_t length = static_cast<socklen_t>(
+        offsetof(sockaddr_un, sun_path) +
+        (socket_path[0] == '@' ? 1 : path.size() + 1));
+    const int fd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return;
+    (void)::sendto(fd, message, std::strlen(message), MSG_NOSIGNAL,
+                   reinterpret_cast<const sockaddr*>(&address), length);
+    ::close(fd);
+}
+
+std::string readTextFile(const std::string& path) {
+    std::ifstream input(path);
+    if (!input) throw std::runtime_error("cannot open config: " + path);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+}
+
+std::string trimWhitespace(std::string value) {
+    const auto first = value.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return {};
+    const auto last = value.find_last_not_of(" \t\r\n");
+    return value.substr(first, last - first + 1);
+}
+
+std::string xmlText(const std::string& xml, const std::string& tag,
+                    const std::string& fallback) {
+    const std::string begin = "<" + tag + ">";
+    const std::string end = "</" + tag + ">";
+    const auto first = xml.find(begin);
+    if (first == std::string::npos) return fallback;
+    if (xml.find(begin, first + begin.size()) != std::string::npos) {
+        throw std::runtime_error("duplicate XML tag: " + tag);
+    }
+    const auto value_begin = first + begin.size();
+    const auto value_end = xml.find(end, value_begin);
+    if (value_end == std::string::npos) {
+        throw std::runtime_error("unterminated XML tag: " + tag);
+    }
+    if (xml.find(end, value_end + end.size()) != std::string::npos) {
+        throw std::runtime_error("duplicate XML closing tag: " + tag);
+    }
+    return trimWhitespace(xml.substr(value_begin, value_end - value_begin));
+}
+
+std::string xmlValue(const std::string& xml, const std::string& tag,
+                     const std::string& fallback) {
+    return xmlText(xml, tag, fallback);
+}
+
+int xmlInt(const std::string& xml, const std::string& tag, int fallback) {
+    const std::string value = xmlText(xml, tag, std::to_string(fallback));
+    std::size_t parsed = 0;
+    long long result = 0;
+    try {
+        result = std::stoll(value, &parsed, 10);
+    } catch (...) {
+        throw std::runtime_error("invalid integer XML value: " + tag);
+    }
+    if (parsed != value.size() ||
+        result < std::numeric_limits<int>::min() ||
+        result > std::numeric_limits<int>::max()) {
+        throw std::runtime_error("invalid integer XML value: " + tag);
+    }
+    return static_cast<int>(result);
+}
+
+double xmlDouble(const std::string& xml, const std::string& tag, double fallback) {
+    const std::string value = xmlText(xml, tag, std::to_string(fallback));
+    std::size_t parsed = 0;
+    double result = 0.0;
+    try {
+        result = std::stod(value, &parsed);
+    } catch (...) {
+        throw std::runtime_error("invalid floating-point XML value: " + tag);
+    }
+    if (parsed != value.size() || !std::isfinite(result)) {
+        throw std::runtime_error("invalid floating-point XML value: " + tag);
+    }
+    return result;
+}
+
+void validateXmlEnvelope(const std::string& xml) {
+    const auto root_begin = xml.find("<DeviceConfig");
+    const auto root_end = xml.rfind("</DeviceConfig>");
+    if (root_begin == std::string::npos || root_end == std::string::npos ||
+        root_end <= root_begin) {
+        throw std::runtime_error("configuration must contain one DeviceConfig root");
+    }
+    if (xml.find("<DeviceConfig", root_begin + 1) != std::string::npos ||
+        xml.find("</DeviceConfig>", root_end + 1) != std::string::npos) {
+        throw std::runtime_error("configuration must contain one DeviceConfig root");
+    }
+    const auto version_key = xml.find("version=", root_begin);
+    if (version_key == std::string::npos || version_key > xml.find('>', root_begin)) {
+        throw std::runtime_error("DeviceConfig version is required");
+    }
+    const char quote = xml[version_key + 8];
+    if (quote != '"' && quote != '\'') {
+        throw std::runtime_error("DeviceConfig version must be quoted");
+    }
+    const auto version_end = xml.find(quote, version_key + 9);
+    if (version_end == std::string::npos) {
+        throw std::runtime_error("DeviceConfig version is unterminated");
+    }
+    const std::string version = xml.substr(version_key + 9, version_end - version_key - 9);
+    if (version != "2.2") {
+        throw std::runtime_error("unsupported DeviceConfig version: " + version);
+    }
+}
+
+uint16_t xmlCanId(const std::string& xml, const std::string& tag, uint16_t fallback) {
+    const int value = xmlInt(xml, tag, fallback);
+    if (value < 1 || value > static_cast<int>(CAN_SFF_MASK)) {
+        throw std::runtime_error(tag + " must be a standard CAN ID in range 1..2047");
+    }
+    return static_cast<uint16_t>(value);
+}
+
+// ----------------------------------------------------------------------------
+// 1. Configuration model. XML parameters are loaded into this structure.
+// ----------------------------------------------------------------------------
+struct Config {
+    std::string sbus_port{"/dev/ttyS1"};
+    std::string can_port{"can0"};
+    int run_rpm{100};           // physical wheel RPM
+    int rotate_rpm{50};        // physical wheel RPM
+    int turn_max_rpm{0};       // max outer wheel RPM while arc-turning; 0 disables
+    // ROS 2 速度模式：/cmd_vel 的线速度/角速度直接映射四轮目标转速（可设置速度）。
+    bool ros_speed_mode_enable{true};
+    double ros_max_linear_mps{0.5};   // 线速度限幅 m/s
+    double ros_max_angular_radps{1.0}; // 角速度限幅 rad/s
+    // v4 安全出口：直接消费 /safety/safe_motion_command（默认启用）；
+    // 旧 /cmd_vel 仅作兼容保留，默认不参与控制。
+    bool ros_safe_command_enable{true};
+    bool legacy_cmd_vel_enable{false};
+    double ros_safe_command_max_ttl_s{0.20};
+    double ros_chassis_state_rate_hz{20.0};
+    int arc_turn_blend_ms{700}; // ramp straight-to-arc differential over this time
+    double arc_turn_yawrate_kp{0.35}; // extra inner-wheel RPM drop per deg/s under-turn
+    int arc_turn_yawrate_max_boost_rpm{50};
+    int arc_turn_min_inner_rpm{-30};
+    int arc_turn_max_current{0}; // 0 = use Wheel_Max_Current; only during throttle+steering
+    int arc_turn_start_max_current{0}; // 0 = use Wheel_Start_Max_Current
+    int arc_turn_inner_reverse_hold_current{0}; // force inner reverse torque during arc, 10mA units
+    bool rotate_in_place_enable{true};
+    int rotate_direction_sign{1};
+    bool rotate_factory_current_control_enable{true};
+    int rotate_neutral_hold_ms{150}; // delay before in-place rotate, filters stick jitter
+    bool rotate_speed_guard_enable{true};
+    double rotate_start_max_rpm{25.0}; // allow factory rotate current only below this wheel rpm
+    int rotate_start_guard_timeout_ms{1200}; // then allow anyway to avoid getting stuck
+    int speed_accel_rpm_s{100};       // software target ramp
+    int reverse_speed_accel_rpm_s{0}; // 0 = use Speed_Accel_RPM_s
+    int speed_decel_rpm_s{200};       // software target ramp
+    double wheel_speed_kp{0.08};
+    double wheel_speed_ki{0.03};
+    std::string wheel_control_mode{"current"};
+    int wheel_feedforward_current{18};
+    int wheel_max_current{40};        // running limit: 0.40A
+    int reverse_wheel_max_current{0};  // optional reverse running current limit
+    int rotate_max_current{500};      // factory in-place rotate torque: 5.00A, 10mA/unit
+    int wheel_integral_max_current{15};
+    int wheel_start_initial_current{20};
+    int wheel_start_step_current{2};
+    int wheel_start_step_ms{100};
+    int wheel_start_max_current{70};
+    int wheel_start_kick_ms{200};
+    double left_current_gain{1.0};
+    double right_current_gain{1.0};
+    std::array<double, 4> wheel_speed_trim_rpm{{0.0, 0.0, 0.0, 0.0}};
+    // Current-mode differential feedforward: create real left/right current
+    // bias from heading-induced target RPM bias.
+    double wheel_diff_current_per_rpm{0.0};
+    int wheel_diff_max_current{0};
+    // Current-mode differential feedback: close the *measured* left/right RPM gap,
+    // not only the commanded target gap from heading hold.
+    double wheel_diff_feedback_current_per_rpm{0.0};
+    int wheel_diff_feedback_max_current{0};
+    int wheel_start_threshold_rpm{5};
+    int wheel_start_confirm_samples{2};
+    int wheel_stall_threshold_rpm{2};
+    int wheel_stall_confirm_samples{3};
+    int wheel_start_timeout_ms{6000};
+    bool brake_enable{true};
+    int stop_brake_window_ms{900};
+    int brake_current{60};          // active brake current, 10 mA/unit
+    double brake_release_rpm{1.5};  // stop braking below this wheel RPM
+    // During drive, allow only a small reverse current to slow an overspeeding
+    // wheel. This prevents coasting from ignoring heading correction without
+    // killing vehicle speed like full reverse braking did.
+    int drive_light_brake_current{0};
+    int reverse_drive_light_brake_current{0}; // 0 = use Drive_Light_Brake_Current
+    double drive_light_brake_overspeed_rpm{4.0};
+    double reverse_drive_light_brake_overspeed_rpm{0.0}; // 0 = use Drive_Light_Brake_Overspeed_RPM
+    int wheel_overspeed_rpm{160};
+    int speed_feedback_timeout_ms{300};
+    int cut_current{1000};     // mower remains current controlled, 10 mA/unit
+    double turn_inner_ratio{0.50};
+    int low_threshold{800};
+    int high_threshold{1199};
+    int failsafe_ms{300};
+    int heartbeat_ms{200};
+    int control_ms{100};
+    int speed_query_ms{200};
+    int speed_log_ms{500};
+    double wheel_radius_m{0.10};
+    double track_width_m{0.45};
+    bool odom_log_enable{true};
+    std::string odom_log_path{"odometry.csv"};
+    int pole_pairs{4};
+    double gear_ratio{1.0};
+    int throttle_channel{3};    // 1-based SBUS channel
+    int steering_channel{4};    // 1-based SBUS channel
+    bool throttle_invert{false}; // RC 油门方向反向（默认低值=前进）
+    bool steering_invert{false}; // RC 转向方向反向（默认低值=右转）
+    int mower_channel{2};       // 1-based SBUS channel
+    int gear_channel{6};        // 1-based SBUS channel, 3-position gear switch; 0 disables
+    bool gear_select_enable{true};
+    int gear_low_run_rpm{70};
+    int gear_low_turn_max_rpm{70};
+    int gear_mid_run_rpm{120};
+    int gear_mid_turn_max_rpm{100};
+    int gear_high_run_rpm{140};
+    int gear_high_turn_max_rpm{100};
+    bool app_control_enable{true};
+    int app_udp_port{8091};
+    int app_timeout_ms{300};
+    std::array<uint16_t, 4> motor_ids{2, 1, 4, 3}; // FL, RL, FR, RR
+    std::array<int, 4> motor_dirs{1, 1, -1, -1};   // physical direction correction
+    uint16_t mower_id{5};
+    bool show_log{true};
+    bool imu_heading_enable{true};
+    std::string imu_device{"/sys/bus/iio/devices/iio:device0"};
+    std::string imu_axis{"z"};
+    double imu_yaw_sign{-1.0};
+    int imu_calibrate_ms{3000};
+    double imu_deadband_dps{0.30};
+    double imu_max_rate_dps{180.0};
+    double imu_max_yaw_step_deg{4.0};
+    double heading_kp{2.0};
+    double heading_ki{0.0};
+    double heading_kd{0.4};
+    int heading_integral_max_correction{10};
+    int heading_max_correction{10};
+    int reverse_heading_max_correction{0};  // 0 = use Heading_Max_Correction
+    int heading_correction_sign{1};
+    int heading_reverse_correction_sign{1};
+    // If the robot is already drifting, do not wait for a small linear PID
+    // output to slowly build up. Force an early differential RPM command and
+    // grow it nonlinearly with heading error.
+    double heading_min_correction_error_deg{0.0};
+    double reverse_heading_min_correction_error_deg{0.0}; // 0 = use Heading_Min_Correction_Error_Deg
+    int heading_min_correction_rpm{0};
+    int reverse_heading_min_correction_rpm{0};  // 0 = use Heading_Min_Correction_RPM
+    double heading_error_boost_kp{0.0};
+    double reverse_heading_error_boost_kp{0.0}; // 0 = use Heading_Error_Boost_Kp
+    // Smooth heading correction so target RPM does not jump between small and
+    // boosted correction values at higher vehicle speed. Unit: RPM change per
+    // control loop; 0 disables smoothing.
+    int heading_correction_slew_rpm_per_cycle{0};
+    int reverse_heading_correction_slew_rpm_per_cycle{0};  // 0 = use Heading_Correction_Slew_RPM_Per_Cycle
+    double heading_forward_trim{0.0};
+    double heading_reverse_trim{0.0};
+    double reverse_left_target_trim_rpm{0.0};
+    double reverse_right_target_trim_rpm{0.0};
+    int heading_reset_steering_hold_ms{500};
+    int heading_startup_hold_ms{500};
+    bool direction_change_hold_enable{true};
+    double direction_change_stop_rpm{5.0};
+    int direction_change_hold_timeout_ms{2500};
+    int direction_change_post_hold_ms{1000};
+    int direction_change_post_max_diff_rpm{4};
+    bool lateral_hold_enable{false};
+    double lateral_kp_deg_per_m{0.0};
+    double lateral_max_heading_deg{0.0};
+    // Convert accumulated lateral offset directly into an achievable left/right
+    // RPM split. Yaw-bias alone can be too indirect at 90+ RPM because the
+    // heading loop may be clamped or one side may saturate.
+    double lateral_diff_kp_rpm_per_m{0.0};
+    int lateral_diff_max_rpm{0};
+    int lateral_diff_slew_rpm_per_cycle{0};
+};
+
+Config loadConfig(const std::string& path) {
+    const auto xml = readTextFile(path);
+    validateXmlEnvelope(xml);
+    Config c;
+    c.sbus_port = xmlValue(xml, "SBus_Port", c.sbus_port);
+    c.can_port = xmlValue(xml, "Can_Port", c.can_port);
+    c.run_rpm = xmlInt(xml, "Run_RPM", c.run_rpm);
+    c.rotate_rpm = xmlInt(xml, "Rotate_RPM", c.rotate_rpm);
+    c.turn_max_rpm = xmlInt(xml, "Turn_Max_RPM", c.turn_max_rpm);
+    c.ros_speed_mode_enable = xmlInt(xml, "ROS_Speed_Mode_Enable", c.ros_speed_mode_enable ? 1 : 0) != 0;
+    c.ros_max_linear_mps = xmlDouble(xml, "ROS_Max_Linear_mps", c.ros_max_linear_mps);
+    c.ros_max_angular_radps = xmlDouble(xml, "ROS_Max_Angular_radps", c.ros_max_angular_radps);
+    c.ros_safe_command_enable =
+        xmlInt(xml, "ROS_SafeCommand_Enable", c.ros_safe_command_enable ? 1 : 0) != 0;
+    c.legacy_cmd_vel_enable =
+        xmlInt(xml, "ROS_Legacy_CmdVel_Enable", c.legacy_cmd_vel_enable ? 1 : 0) != 0;
+    c.ros_safe_command_max_ttl_s =
+        xmlDouble(xml, "ROS_SafeCommand_Max_TTL_s", c.ros_safe_command_max_ttl_s);
+    c.ros_chassis_state_rate_hz =
+        xmlDouble(xml, "ROS_ChassisState_Rate_Hz", c.ros_chassis_state_rate_hz);
+    c.arc_turn_blend_ms = xmlInt(xml, "Arc_Turn_Blend_ms", c.arc_turn_blend_ms);
+    c.arc_turn_yawrate_kp = xmlDouble(xml, "Arc_Turn_YawRate_Kp", c.arc_turn_yawrate_kp);
+    c.arc_turn_yawrate_max_boost_rpm =
+        xmlInt(xml, "Arc_Turn_YawRate_Max_Boost_RPM", c.arc_turn_yawrate_max_boost_rpm);
+    c.arc_turn_min_inner_rpm = xmlInt(xml, "Arc_Turn_Min_Inner_RPM", c.arc_turn_min_inner_rpm);
+    c.arc_turn_max_current = xmlInt(xml, "Arc_Turn_Max_Current", c.arc_turn_max_current);
+    c.arc_turn_start_max_current =
+        xmlInt(xml, "Arc_Turn_Start_Max_Current", c.arc_turn_start_max_current);
+    c.arc_turn_inner_reverse_hold_current =
+        xmlInt(xml, "Arc_Turn_Inner_Reverse_Hold_Current", c.arc_turn_inner_reverse_hold_current);
+    c.rotate_in_place_enable =
+        xmlInt(xml, "Rotate_In_Place_Enable",
+               c.rotate_in_place_enable ? 1 : 0) != 0;
+    c.rotate_direction_sign =
+        xmlInt(xml, "Rotate_Direction_Sign", c.rotate_direction_sign);
+    c.rotate_factory_current_control_enable =
+        xmlInt(xml, "Rotate_Factory_Current_Control_Enable",
+               c.rotate_factory_current_control_enable ? 1 : 0) != 0;
+    c.rotate_neutral_hold_ms = xmlInt(xml, "Rotate_Neutral_Hold_ms", c.rotate_neutral_hold_ms);
+    c.rotate_speed_guard_enable =
+        xmlInt(xml, "Rotate_Speed_Guard_Enable", c.rotate_speed_guard_enable ? 1 : 0) != 0;
+    c.rotate_start_max_rpm = xmlDouble(xml, "Rotate_Start_Max_RPM", c.rotate_start_max_rpm);
+    c.rotate_start_guard_timeout_ms =
+        xmlInt(xml, "Rotate_Start_Guard_Timeout_ms", c.rotate_start_guard_timeout_ms);
+    c.speed_accel_rpm_s = xmlInt(xml, "Speed_Accel_RPM_s", c.speed_accel_rpm_s);
+    c.reverse_speed_accel_rpm_s = xmlInt(xml, "Reverse_Speed_Accel_RPM_s", c.reverse_speed_accel_rpm_s);
+    c.speed_decel_rpm_s = xmlInt(xml, "Speed_Decel_RPM_s", c.speed_decel_rpm_s);
+    c.wheel_speed_kp = xmlDouble(xml, "Wheel_Speed_Kp", c.wheel_speed_kp);
+    c.wheel_speed_ki = xmlDouble(xml, "Wheel_Speed_Ki", c.wheel_speed_ki);
+    c.wheel_control_mode = xmlValue(xml, "Wheel_Control_Mode", c.wheel_control_mode);
+    c.wheel_feedforward_current = xmlInt(xml, "Wheel_Feedforward_Current", c.wheel_feedforward_current);
+    c.wheel_max_current = xmlInt(xml, "Wheel_Max_Current", c.wheel_max_current);
+    c.reverse_wheel_max_current =
+        xmlInt(xml, "Reverse_Wheel_Max_Current", c.reverse_wheel_max_current);
+    c.rotate_max_current = xmlInt(xml, "Rotate_Max_Current", c.rotate_max_current);
+    c.wheel_integral_max_current = xmlInt(xml, "Wheel_Integral_Max_Current", c.wheel_integral_max_current);
+    c.wheel_start_initial_current = xmlInt(xml, "Wheel_Start_Initial_Current", c.wheel_start_initial_current);
+    c.wheel_start_step_current = xmlInt(xml, "Wheel_Start_Step_Current", c.wheel_start_step_current);
+    c.wheel_start_step_ms = xmlInt(xml, "Wheel_Start_Step_ms", c.wheel_start_step_ms);
+    c.wheel_start_max_current = xmlInt(xml, "Wheel_Start_Max_Current", c.wheel_start_max_current);
+    c.wheel_start_kick_ms = xmlInt(xml, "Wheel_Start_Kick_ms", c.wheel_start_kick_ms);
+    c.left_current_gain = xmlDouble(xml, "Left_Current_Gain", c.left_current_gain);
+    c.right_current_gain = xmlDouble(xml, "Right_Current_Gain", c.right_current_gain);
+    c.wheel_speed_trim_rpm[0] = xmlDouble(xml, "Wheel_FL_Speed_Trim_RPM", c.wheel_speed_trim_rpm[0]);
+    c.wheel_speed_trim_rpm[1] = xmlDouble(xml, "Wheel_RL_Speed_Trim_RPM", c.wheel_speed_trim_rpm[1]);
+    c.wheel_speed_trim_rpm[2] = xmlDouble(xml, "Wheel_FR_Speed_Trim_RPM", c.wheel_speed_trim_rpm[2]);
+    c.wheel_speed_trim_rpm[3] = xmlDouble(xml, "Wheel_RR_Speed_Trim_RPM", c.wheel_speed_trim_rpm[3]);
+    c.wheel_diff_current_per_rpm = xmlDouble(xml, "Wheel_Diff_Current_Per_RPM", c.wheel_diff_current_per_rpm);
+    c.wheel_diff_max_current = xmlInt(xml, "Wheel_Diff_Max_Current", c.wheel_diff_max_current);
+    c.wheel_diff_feedback_current_per_rpm = xmlDouble(xml, "Wheel_Diff_Feedback_Current_Per_RPM", c.wheel_diff_feedback_current_per_rpm);
+    c.wheel_diff_feedback_max_current = xmlInt(xml, "Wheel_Diff_Feedback_Max_Current", c.wheel_diff_feedback_max_current);
+    c.wheel_start_threshold_rpm = xmlInt(xml, "Wheel_Start_Threshold_RPM", c.wheel_start_threshold_rpm);
+    c.wheel_start_confirm_samples = xmlInt(xml, "Wheel_Start_Confirm_Samples", c.wheel_start_confirm_samples);
+    c.wheel_stall_threshold_rpm = xmlInt(xml, "Wheel_Stall_Threshold_RPM", c.wheel_stall_threshold_rpm);
+    c.wheel_stall_confirm_samples = xmlInt(xml, "Wheel_Stall_Confirm_Samples", c.wheel_stall_confirm_samples);
+    c.wheel_start_timeout_ms = xmlInt(xml, "Wheel_Start_Timeout_ms", c.wheel_start_timeout_ms);
+    c.brake_enable = xmlInt(xml, "Brake_Enable", c.brake_enable ? 1 : 0) != 0;
+    c.stop_brake_window_ms = xmlInt(xml, "Stop_Brake_Window_ms", c.stop_brake_window_ms);
+    c.brake_current = xmlInt(xml, "Brake_Current", c.brake_current);
+    c.brake_release_rpm = xmlDouble(xml, "Brake_Release_RPM", c.brake_release_rpm);
+    c.drive_light_brake_current = xmlInt(xml, "Drive_Light_Brake_Current", c.drive_light_brake_current);
+    c.reverse_drive_light_brake_current = xmlInt(xml, "Reverse_Drive_Light_Brake_Current", c.reverse_drive_light_brake_current);
+    c.drive_light_brake_overspeed_rpm = xmlDouble(xml, "Drive_Light_Brake_Overspeed_RPM", c.drive_light_brake_overspeed_rpm);
+    c.reverse_drive_light_brake_overspeed_rpm = xmlDouble(xml, "Reverse_Drive_Light_Brake_Overspeed_RPM", c.reverse_drive_light_brake_overspeed_rpm);
+    c.wheel_overspeed_rpm = xmlInt(xml, "Wheel_Overspeed_RPM", c.wheel_overspeed_rpm);
+    c.speed_feedback_timeout_ms = xmlInt(xml, "Speed_Feedback_Timeout_ms", c.speed_feedback_timeout_ms);
+    c.cut_current = xmlInt(xml, "Cut_Speed", c.cut_current);
+    c.turn_inner_ratio = xmlDouble(xml, "Turn_Inner_Ratio", c.turn_inner_ratio);
+    c.low_threshold = xmlInt(xml, "Low_Threshold", c.low_threshold);
+    c.high_threshold = xmlInt(xml, "High_Threshold", c.high_threshold);
+    c.failsafe_ms = xmlInt(xml, "Failsafe_ms", c.failsafe_ms);
+    c.heartbeat_ms = xmlInt(xml, "Heartbeat_ms", c.heartbeat_ms);
+    c.control_ms = xmlInt(xml, "Control_ms", c.control_ms);
+    c.speed_query_ms = xmlInt(xml, "Speed_Query_ms", c.speed_query_ms);
+    c.speed_log_ms = xmlInt(xml, "Speed_Log_ms", c.speed_log_ms);
+    c.wheel_radius_m = xmlDouble(xml, "Wheel_Radius_m", c.wheel_radius_m);
+    c.track_width_m = xmlDouble(xml, "Track_Width_m", c.track_width_m);
+    c.odom_log_enable = xmlInt(xml, "Odom_Log_Enable", c.odom_log_enable ? 1 : 0) != 0;
+    c.odom_log_path = xmlValue(xml, "Odom_Log_Path", c.odom_log_path);
+    c.pole_pairs = xmlInt(xml, "Pole_Pairs", c.pole_pairs);
+    c.gear_ratio = xmlDouble(xml, "Gear_Ratio", c.gear_ratio);
+    c.throttle_channel = xmlInt(xml, "Throttle_Channel", c.throttle_channel);
+    c.steering_channel = xmlInt(xml, "Steering_Channel", c.steering_channel);
+    c.throttle_invert = xmlInt(xml, "Throttle_Invert", c.throttle_invert ? 1 : 0) != 0;
+    c.steering_invert = xmlInt(xml, "Steering_Invert", c.steering_invert ? 1 : 0) != 0;
+    c.mower_channel = xmlInt(xml, "Mower_Channel", c.mower_channel);
+    c.gear_channel = xmlInt(xml, "Gear_Channel", c.gear_channel);
+    c.gear_select_enable = xmlInt(xml, "Gear_Select_Enable", c.gear_select_enable ? 1 : 0) != 0;
+    c.gear_low_run_rpm = xmlInt(xml, "Gear_Low_Run_RPM", c.gear_low_run_rpm);
+    c.gear_low_turn_max_rpm = xmlInt(xml, "Gear_Low_Turn_Max_RPM", c.gear_low_turn_max_rpm);
+    c.gear_mid_run_rpm = xmlInt(xml, "Gear_Mid_Run_RPM", c.gear_mid_run_rpm);
+    c.gear_mid_turn_max_rpm = xmlInt(xml, "Gear_Mid_Turn_Max_RPM", c.gear_mid_turn_max_rpm);
+    c.gear_high_run_rpm = xmlInt(xml, "Gear_High_Run_RPM", c.gear_high_run_rpm);
+    c.gear_high_turn_max_rpm = xmlInt(xml, "Gear_High_Turn_Max_RPM", c.gear_high_turn_max_rpm);
+    c.app_control_enable = xmlInt(xml, "App_Control_Enable", c.app_control_enable ? 1 : 0) != 0;
+    c.app_udp_port = xmlInt(xml, "App_UDP_Port", c.app_udp_port);
+    c.app_timeout_ms = xmlInt(xml, "App_Timeout_ms", c.app_timeout_ms);
+    c.motor_ids = {
+        xmlCanId(xml, "FL_ID", c.motor_ids[0]),
+        xmlCanId(xml, "RL_ID", c.motor_ids[1]),
+        xmlCanId(xml, "FR_ID", c.motor_ids[2]),
+        xmlCanId(xml, "RR_ID", c.motor_ids[3])
+    };
+    c.motor_dirs = {
+        xmlInt(xml, "FL_Dir", c.motor_dirs[0]),
+        xmlInt(xml, "RL_Dir", c.motor_dirs[1]),
+        xmlInt(xml, "FR_Dir", c.motor_dirs[2]),
+        xmlInt(xml, "RR_Dir", c.motor_dirs[3])
+    };
+    c.mower_id = xmlCanId(xml, "Mower_ID", c.mower_id);
+    c.show_log = xmlInt(xml, "ShowLog", c.show_log ? 1 : 0) != 0;
+    c.imu_heading_enable = xmlInt(xml, "IMU_Heading_Enable", c.imu_heading_enable ? 1 : 0) != 0;
+    c.imu_device = xmlValue(xml, "IMU_Device", c.imu_device);
+    c.imu_axis = xmlValue(xml, "IMU_Axis", c.imu_axis);
+    c.imu_yaw_sign = xmlDouble(xml, "IMU_Yaw_Sign", c.imu_yaw_sign);
+    c.imu_calibrate_ms = xmlInt(xml, "IMU_Calibrate_ms", c.imu_calibrate_ms);
+    c.imu_deadband_dps = xmlDouble(xml, "IMU_Deadband_dps", c.imu_deadband_dps);
+    c.imu_max_rate_dps = xmlDouble(xml, "IMU_Max_Rate_dps", c.imu_max_rate_dps);
+    c.imu_max_yaw_step_deg = xmlDouble(xml, "IMU_Max_Yaw_Step_Deg", c.imu_max_yaw_step_deg);
+    c.heading_kp = xmlDouble(xml, "Heading_Kp", c.heading_kp);
+    c.heading_ki = xmlDouble(xml, "Heading_Ki", c.heading_ki);
+    c.heading_kd = xmlDouble(xml, "Heading_Kd", c.heading_kd);
+    c.heading_integral_max_correction = xmlInt(xml, "Heading_Integral_Max_Correction", c.heading_integral_max_correction);
+    c.heading_max_correction = xmlInt(xml, "Heading_Max_Correction", c.heading_max_correction);
+    c.reverse_heading_max_correction = xmlInt(xml, "Reverse_Heading_Max_Correction", c.reverse_heading_max_correction);
+    c.heading_correction_sign = xmlInt(xml, "Heading_Correction_Sign", c.heading_correction_sign);
+    c.heading_reverse_correction_sign = xmlInt(xml, "Heading_Reverse_Correction_Sign", c.heading_reverse_correction_sign);
+    c.heading_min_correction_error_deg = xmlDouble(xml, "Heading_Min_Correction_Error_Deg", c.heading_min_correction_error_deg);
+    c.reverse_heading_min_correction_error_deg = xmlDouble(xml, "Reverse_Heading_Min_Correction_Error_Deg", c.reverse_heading_min_correction_error_deg);
+    c.heading_min_correction_rpm = xmlInt(xml, "Heading_Min_Correction_RPM", c.heading_min_correction_rpm);
+    c.reverse_heading_min_correction_rpm = xmlInt(xml, "Reverse_Heading_Min_Correction_RPM", c.reverse_heading_min_correction_rpm);
+    c.heading_error_boost_kp = xmlDouble(xml, "Heading_Error_Boost_Kp", c.heading_error_boost_kp);
+    c.reverse_heading_error_boost_kp = xmlDouble(xml, "Reverse_Heading_Error_Boost_Kp", c.reverse_heading_error_boost_kp);
+    c.heading_correction_slew_rpm_per_cycle = xmlInt(xml, "Heading_Correction_Slew_RPM_Per_Cycle", c.heading_correction_slew_rpm_per_cycle);
+    c.reverse_heading_correction_slew_rpm_per_cycle = xmlInt(xml, "Reverse_Heading_Correction_Slew_RPM_Per_Cycle", c.reverse_heading_correction_slew_rpm_per_cycle);
+    c.heading_forward_trim = xmlDouble(xml, "Heading_Forward_Trim", c.heading_forward_trim);
+    c.heading_reverse_trim = xmlDouble(xml, "Heading_Reverse_Trim", c.heading_reverse_trim);
+    c.reverse_left_target_trim_rpm =
+        xmlDouble(xml, "Reverse_Left_Target_Trim_RPM", c.reverse_left_target_trim_rpm);
+    c.reverse_right_target_trim_rpm =
+        xmlDouble(xml, "Reverse_Right_Target_Trim_RPM", c.reverse_right_target_trim_rpm);
+    c.heading_reset_steering_hold_ms = xmlInt(xml, "Heading_Reset_Steering_Hold_ms", c.heading_reset_steering_hold_ms);
+    c.heading_startup_hold_ms = xmlInt(xml, "Heading_Startup_Hold_ms", c.heading_startup_hold_ms);
+    c.direction_change_hold_enable =
+        xmlInt(xml, "Direction_Change_Hold_Enable",
+               c.direction_change_hold_enable ? 1 : 0) != 0;
+    c.direction_change_stop_rpm =
+        xmlDouble(xml, "Direction_Change_Stop_RPM", c.direction_change_stop_rpm);
+    c.direction_change_hold_timeout_ms =
+        xmlInt(xml, "Direction_Change_Hold_Timeout_ms",
+               c.direction_change_hold_timeout_ms);
+    c.direction_change_post_hold_ms =
+        xmlInt(xml, "Direction_Change_Post_Hold_ms",
+               c.direction_change_post_hold_ms);
+    c.direction_change_post_max_diff_rpm =
+        xmlInt(xml, "Direction_Change_Post_Max_Diff_RPM",
+               c.direction_change_post_max_diff_rpm);
+    c.lateral_hold_enable = xmlInt(xml, "Lateral_Hold_Enable", c.lateral_hold_enable ? 1 : 0) != 0;
+    c.lateral_kp_deg_per_m = xmlDouble(xml, "Lateral_Kp_Deg_Per_M", c.lateral_kp_deg_per_m);
+    c.lateral_max_heading_deg = xmlDouble(xml, "Lateral_Max_Heading_Deg", c.lateral_max_heading_deg);
+    c.lateral_diff_kp_rpm_per_m = xmlDouble(xml, "Lateral_Diff_Kp_RPM_Per_M", c.lateral_diff_kp_rpm_per_m);
+    c.lateral_diff_max_rpm = xmlInt(xml, "Lateral_Diff_Max_RPM", c.lateral_diff_max_rpm);
+    c.lateral_diff_slew_rpm_per_cycle = xmlInt(xml, "Lateral_Diff_Slew_RPM_Per_Cycle", c.lateral_diff_slew_rpm_per_cycle);
+
+    if (c.ros_max_linear_mps <= 0.0 || c.ros_max_linear_mps > 2.0 ||
+        c.ros_max_angular_radps <= 0.0 || c.ros_max_angular_radps > 4.0 ||
+        c.ros_safe_command_max_ttl_s <= 0.0 || c.ros_safe_command_max_ttl_s > 1.0 ||
+        c.ros_chassis_state_rate_hz < 1.0 || c.ros_chassis_state_rate_hz > 100.0 ||
+        c.run_rpm <= 0 || c.rotate_rpm <= 0 || c.speed_accel_rpm_s <= 0 ||
+        c.reverse_speed_accel_rpm_s < 0 ||
+        c.speed_decel_rpm_s <= 0 || c.wheel_speed_kp < 0.0 || c.wheel_speed_ki < 0.0 ||
+        c.wheel_feedforward_current < 0 || c.wheel_feedforward_current > c.wheel_max_current ||
+        c.wheel_max_current <= 0 || c.wheel_max_current > 1500 ||
+        c.rotate_max_current <= 0 || c.rotate_max_current > 1500 ||
+        c.wheel_integral_max_current < 0 || c.wheel_integral_max_current > c.wheel_max_current ||
+        c.wheel_start_initial_current < 1 || c.wheel_start_initial_current > c.wheel_start_max_current ||
+        c.wheel_start_step_current < 1 || c.wheel_start_step_ms < c.control_ms ||
+        c.wheel_start_max_current < c.wheel_max_current || c.wheel_start_max_current > 1500 ||
+        c.wheel_start_kick_ms < 0 || c.wheel_start_kick_ms > c.wheel_start_timeout_ms ||
+        c.left_current_gain < 0.50 || c.left_current_gain > 1.80 ||
+        c.right_current_gain < 0.50 || c.right_current_gain > 1.80 ||
+        c.wheel_diff_current_per_rpm < 0.0 || c.wheel_diff_current_per_rpm > 20.0 ||
+        c.wheel_diff_max_current < 0 || c.wheel_diff_max_current > c.wheel_max_current ||
+        c.wheel_start_threshold_rpm < 1 || c.wheel_start_confirm_samples < 1 ||
+        c.wheel_stall_threshold_rpm < 0 || c.wheel_stall_threshold_rpm >= c.wheel_start_threshold_rpm ||
+        c.wheel_stall_confirm_samples < 1 || c.wheel_start_timeout_ms < c.wheel_start_step_ms ||
+        c.brake_current < 0 || c.brake_current > c.wheel_max_current || c.brake_release_rpm < 0.0 ||
+        c.wheel_overspeed_rpm <= c.run_rpm ||
+        c.speed_feedback_timeout_ms < c.speed_query_ms || c.cut_current < 0 ||
+        (c.wheel_control_mode != "current" && c.wheel_control_mode != "speed"))
+        throw std::runtime_error("invalid software wheel speed settings");
+    if (c.speed_query_ms < 10 || c.speed_log_ms < 100 ||
+        c.wheel_radius_m <= 0.0 || c.track_width_m <= 0.0 ||
+        c.pole_pairs <= 0 || c.gear_ratio <= 0.0)
+        throw std::runtime_error("invalid speed feedback settings");
+    if (c.sbus_port.empty() || c.can_port.empty())
+        throw std::runtime_error("SBus_Port and Can_Port must not be empty");
+    if (c.low_threshold < 0 || c.high_threshold > 2047 ||
+        c.low_threshold >= c.high_threshold)
+        throw std::runtime_error("Low_Threshold must be lower than High_Threshold within 0..2047");
+    for (std::size_t i = 0; i < c.motor_ids.size(); ++i) {
+        for (std::size_t j = i + 1; j < c.motor_ids.size(); ++j) {
+            if (c.motor_ids[i] == c.motor_ids[j])
+                throw std::runtime_error("wheel motor CAN IDs must be unique");
+        }
+        if (c.motor_ids[i] == c.mower_id)
+            throw std::runtime_error("Mower_ID must not duplicate a wheel motor CAN ID");
+    }
+    if (c.odom_log_path.empty()) c.odom_log_enable = false;
+    if (c.turn_inner_ratio < -0.50 || c.turn_inner_ratio > 1.0)
+        throw std::runtime_error("Turn_Inner_Ratio must be between -0.50 and 1");
+    if (c.turn_max_rpm < 0 || c.turn_max_rpm > c.run_rpm)
+        throw std::runtime_error("Turn_Max_RPM must be 0..Run_RPM");
+    if (c.arc_turn_blend_ms < 0 || c.arc_turn_blend_ms > 3000)
+        throw std::runtime_error("Arc_Turn_Blend_ms must be 0..3000");
+    if (c.arc_turn_yawrate_kp < 0.0 || c.arc_turn_yawrate_kp > 10.0)
+        throw std::runtime_error("Arc_Turn_YawRate_Kp must be 0..10");
+    if (c.arc_turn_yawrate_max_boost_rpm < 0 || c.arc_turn_yawrate_max_boost_rpm > c.run_rpm)
+        throw std::runtime_error("Arc_Turn_YawRate_Max_Boost_RPM must be 0..Run_RPM");
+    if (c.arc_turn_min_inner_rpm < -c.run_rpm || c.arc_turn_min_inner_rpm > c.run_rpm)
+        throw std::runtime_error("Arc_Turn_Min_Inner_RPM must be -Run_RPM..Run_RPM");
+    if (c.arc_turn_max_current < 0 || c.arc_turn_max_current > 1000)
+        throw std::runtime_error("Arc_Turn_Max_Current must be 0..1000");
+    if (c.arc_turn_start_max_current < 0 || c.arc_turn_start_max_current > 1000)
+        throw std::runtime_error("Arc_Turn_Start_Max_Current must be 0..1000");
+    if (c.arc_turn_inner_reverse_hold_current < 0 || c.arc_turn_inner_reverse_hold_current > 1000)
+        throw std::runtime_error("Arc_Turn_Inner_Reverse_Hold_Current must be 0..1000");
+    if (c.stop_brake_window_ms < 0 || c.stop_brake_window_ms > 3000)
+        throw std::runtime_error("Stop_Brake_Window_ms must be 0..3000");
+    if (c.rotate_neutral_hold_ms < 0 || c.rotate_neutral_hold_ms > 1000)
+        throw std::runtime_error("Rotate_Neutral_Hold_ms must be 0..1000");
+    if (c.rotate_start_max_rpm < 0.0 || c.rotate_start_max_rpm > c.wheel_overspeed_rpm)
+        throw std::runtime_error("Rotate_Start_Max_RPM must be 0..Wheel_Overspeed_RPM");
+    if (c.rotate_start_guard_timeout_ms < 0 || c.rotate_start_guard_timeout_ms > 5000)
+        throw std::runtime_error("Rotate_Start_Guard_Timeout_ms must be 0..5000");
+    for (int channel : {c.throttle_channel, c.steering_channel, c.mower_channel})
+        if (channel < 1 || channel > 18) throw std::runtime_error("invalid SBUS channel");
+    if (c.gear_select_enable && (c.gear_channel < 1 || c.gear_channel > 18))
+        throw std::runtime_error("invalid Gear_Channel");
+    auto valid_gear = [](int run, int turn) { return run > 0 && turn >= 0 && turn <= run; };
+    if (!valid_gear(c.gear_low_run_rpm, c.gear_low_turn_max_rpm) ||
+        !valid_gear(c.gear_mid_run_rpm, c.gear_mid_turn_max_rpm) ||
+        !valid_gear(c.gear_high_run_rpm, c.gear_high_turn_max_rpm))
+        throw std::runtime_error("invalid gear RPM settings");
+    if (c.app_udp_port < 1 || c.app_udp_port > 65535 ||
+        c.app_timeout_ms < 100 || c.app_timeout_ms > 5000)
+        throw std::runtime_error("invalid APP control settings");
+    for (int dir : c.motor_dirs)
+        if (dir != 1 && dir != -1) throw std::runtime_error("motor direction must be 1 or -1");
+    if (c.imu_axis != "x" && c.imu_axis != "y" && c.imu_axis != "z")
+        throw std::runtime_error("IMU_Axis must be x, y or z");
+    if (c.imu_yaw_sign != 1.0 && c.imu_yaw_sign != -1.0)
+        throw std::runtime_error("IMU_Yaw_Sign must be 1 or -1");
+    if (c.imu_calibrate_ms < 500 || c.imu_max_rate_dps <= 0.0 || c.imu_max_yaw_step_deg <= 0.0 ||
+        c.heading_kp < 0 || c.heading_ki < 0 || c.heading_kd < 0 ||
+        c.heading_integral_max_correction < 0 ||
+        c.heading_integral_max_correction > c.heading_max_correction ||
+        c.heading_max_correction < 0 || c.heading_max_correction > c.run_rpm ||
+        c.reverse_heading_min_correction_error_deg < 0.0 || c.reverse_heading_min_correction_error_deg > 10.0 ||
+        (c.heading_correction_sign != 1 && c.heading_correction_sign != -1) ||
+        std::abs(c.heading_forward_trim) > c.heading_max_correction ||
+        std::abs(c.heading_reverse_trim) > c.heading_max_correction ||
+        c.heading_correction_slew_rpm_per_cycle < 0 || c.heading_correction_slew_rpm_per_cycle > c.heading_max_correction ||
+        c.reverse_heading_correction_slew_rpm_per_cycle < 0 || c.reverse_heading_correction_slew_rpm_per_cycle > std::max(c.heading_max_correction, c.reverse_heading_max_correction) ||
+        c.heading_reset_steering_hold_ms < 0 || c.heading_reset_steering_hold_ms > 5000 ||
+        c.heading_startup_hold_ms < 0 || c.heading_startup_hold_ms > 5000 ||
+        c.direction_change_stop_rpm < 0.0 ||
+        c.direction_change_hold_timeout_ms < c.control_ms ||
+        c.direction_change_post_hold_ms < 0 ||
+        c.direction_change_post_max_diff_rpm < 0 ||
+        c.direction_change_post_max_diff_rpm > 2 * c.run_rpm ||
+        c.lateral_kp_deg_per_m < 0.0 || c.lateral_max_heading_deg < 0.0 ||
+        c.lateral_max_heading_deg > 15.0 ||
+        c.lateral_diff_kp_rpm_per_m < 0.0 ||
+        c.lateral_diff_max_rpm < 0 || c.lateral_diff_max_rpm > c.run_rpm ||
+        c.lateral_diff_slew_rpm_per_cycle < 0 || c.lateral_diff_slew_rpm_per_cycle > c.run_rpm)
+        throw std::runtime_error("invalid IMU heading settings");
+    if (c.rotate_direction_sign != 1 && c.rotate_direction_sign != -1)
+        throw std::runtime_error("Rotate_Direction_Sign must be 1 or -1");
+    return c;
+}
+
+// ----------------------------------------------------------------------------
+// 2. CAN motor interface: speed, current, feedback, and driver current limits.
+// ----------------------------------------------------------------------------
+class CanBus {
+public:
+    explicit CanBus(const std::string& interface_name) {
+        fd_ = ::socket(PF_CAN, SOCK_RAW, CAN_RAW);
+        if (fd_ < 0) throw std::runtime_error("cannot create CAN socket");
+        ifreq ifr{};
+        std::strncpy(ifr.ifr_name, interface_name.c_str(), IFNAMSIZ - 1);
+        if (::ioctl(fd_, SIOCGIFINDEX, &ifr) < 0) throw std::runtime_error("CAN interface not found");
+        sockaddr_can addr{};
+        addr.can_family = AF_CAN;
+        addr.can_ifindex = ifr.ifr_ifindex;
+        if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+            throw std::runtime_error("cannot bind CAN interface");
+    }
+    ~CanBus() { if (fd_ >= 0) ::close(fd_); }
+
+    void heartbeat(uint16_t id) {
+        uint8_t data[1]{0x00};
+        send(id, data, 1);
+    }
+
+    void current(uint16_t id, int value_10ma) {
+        value_10ma = std::clamp(value_10ma, -32768, 32767);
+        const uint16_t raw = static_cast<uint16_t>(static_cast<int16_t>(value_10ma));
+        uint8_t data[3]{0x01,
+                        static_cast<uint8_t>((raw >> 8) & 0xff),
+                        static_cast<uint8_t>(raw & 0xff)};
+        send(id, data, 3);
+    }
+
+    void speed(uint16_t id, int32_t erpm) {
+        const uint32_t raw = static_cast<uint32_t>(erpm);
+        uint8_t data[5]{0x02,
+                        static_cast<uint8_t>((raw >> 24) & 0xff),
+                        static_cast<uint8_t>((raw >> 16) & 0xff),
+                        static_cast<uint8_t>((raw >> 8) & 0xff),
+                        static_cast<uint8_t>(raw & 0xff)};
+        send(id, data, 5);
+    }
+
+    void setAccel(uint16_t id, int32_t erpm_per_s) { sendInt32Command(id, 0x0a, erpm_per_s); }
+    void setDecel(uint16_t id, int32_t erpm_per_s) { sendInt32Command(id, 0x10, erpm_per_s); }
+
+    void setClosedLoopMaxCurrent(uint16_t id, int value_10ma) {
+        value_10ma = std::clamp(value_10ma, 0, 32767);
+        const uint16_t raw = static_cast<uint16_t>(value_10ma);
+        uint8_t data[3]{0x14,
+                        static_cast<uint8_t>((raw >> 8) & 0xff),
+                        static_cast<uint8_t>(raw & 0xff)};
+        send(id, data, 3);
+    }
+
+    void querySpeed(uint16_t id) {
+        uint8_t data[2]{0x0f, 0x01};
+        send(id, data, 2);
+    }
+
+    bool readSpeed(uint16_t& id, int32_t& erpm) {
+        can_frame frame{};
+        const auto n = ::recv(fd_, &frame, sizeof(frame), MSG_DONTWAIT);
+        if (n < 0) {
+            // EAGAIN/EWOULDBLOCK is the normal non-blocking idle result.
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                receive_fault_ = true;
+                receive_fault_reason_ = std::strerror(errno);
+            }
+            return false;
+        }
+        if (n != static_cast<ssize_t>(sizeof(frame))) {
+            receive_fault_ = true;
+            receive_fault_reason_ = "short CAN frame";
+            return false;
+        }
+        id = 0;
+        erpm = 0;
+        if (frame.can_dlc >= 6 && frame.data[0] == 0x0f && frame.data[1] == 0x01) {
+            id = static_cast<uint16_t>(frame.can_id & CAN_SFF_MASK);
+            const uint32_t raw = (static_cast<uint32_t>(frame.data[2]) << 24) |
+                                 (static_cast<uint32_t>(frame.data[3]) << 16) |
+                                 (static_cast<uint32_t>(frame.data[4]) << 8) |
+                                  static_cast<uint32_t>(frame.data[5]);
+            erpm = static_cast<int32_t>(raw);
+        }
+        return true;
+    }
+
+    bool receiveFault() const { return receive_fault_; }
+    const std::string& receiveFaultReason() const { return receive_fault_reason_; }
+
+private:
+    void sendInt32Command(uint16_t id, uint8_t command, int32_t value) {
+        const uint32_t raw = static_cast<uint32_t>(value);
+        uint8_t data[5]{command,
+                        static_cast<uint8_t>((raw >> 24) & 0xff),
+                        static_cast<uint8_t>((raw >> 16) & 0xff),
+                        static_cast<uint8_t>((raw >> 8) & 0xff),
+                        static_cast<uint8_t>(raw & 0xff)};
+        send(id, data, 5);
+    }
+
+    void send(uint16_t id, const uint8_t* data, uint8_t length) {
+        can_frame frame{};
+        frame.can_id = id & CAN_SFF_MASK;
+        frame.can_dlc = length;
+        std::memcpy(frame.data, data, length);
+        for (int attempt = 0; attempt < 20; ++attempt) {
+            if (::write(fd_, &frame, sizeof(frame)) == static_cast<ssize_t>(sizeof(frame)))
+                return;
+            const int error = errno;
+            if (error == ENOBUFS || error == EAGAIN || error == EWOULDBLOCK) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+            throw std::runtime_error("CAN write failed: id=" + std::to_string(id) +
+                                     " command=" + std::to_string(data[0]) +
+                                     " errno=" + std::to_string(error) +
+                                     " (" + std::strerror(error) + ")");
+        }
+        throw std::runtime_error("CAN transmit queue remained full: id=" +
+                                 std::to_string(id) + " command=" +
+                                 std::to_string(data[0]));
+    }
+    int fd_{-1};
+    bool receive_fault_{false};
+    std::string receive_fault_reason_;
+};
+
+struct SbusFrame {
+    std::array<uint16_t, 18> channel{};
+    bool frame_lost{false};
+    bool failsafe{false};
+};
+
+// Vehicle-level safety state machine.
+//
+// This layer sits above the existing wheel controller. Normal RC/APP behavior
+// and all frozen turning parameters remain unchanged; every control cycle now
+// gets one explicit safety decision before torque is requested.
+enum class SafetyState {
+    Init,
+    Ready,
+    Running,
+    StopRequested,
+    LatchedFault
+};
+
+const char* safetyStateName(SafetyState state) {
+    switch (state) {
+    case SafetyState::Init: return "INIT";
+    case SafetyState::Ready: return "READY";
+    case SafetyState::Running: return "RUNNING";
+    case SafetyState::StopRequested: return "STOP_REQUESTED";
+    case SafetyState::LatchedFault: return "LATCHED_FAULT";
+    }
+    return "UNKNOWN";
+}
+
+class SafetyManager {
+public:
+    void initialize() {
+        transition(SafetyState::Ready, "startup_complete");
+    }
+
+    // Hard faults remain latched until the process is restarted. This avoids
+    // immediately re-enabling torque after a wheel feedback or wheel safety
+    // failure while the operator is still holding the control stick.
+    void update(bool command_requested,
+                bool drive_requested,
+                bool input_failsafe,
+                bool app_estop,
+                bool feedback_ok,
+                bool wheel_safety_latched,
+                bool can_receive_fault,
+                const std::string& can_receive_fault_reason,
+                bool control_cycle_overrun) {
+        if (state_ == SafetyState::LatchedFault) return;
+
+        if (control_cycle_overrun) {
+            latchFault("control_cycle_overrun");
+            return;
+        }
+
+        if (can_receive_fault) {
+            latchFault("can_receive_error: " + can_receive_fault_reason);
+            return;
+        }
+
+        if (wheel_safety_latched) {
+            latchFault("wheel_controller_safety_latch");
+            return;
+        }
+
+        if (drive_requested && !feedback_ok) {
+            latchFault("motion_requested_without_fresh_feedback");
+            return;
+        }
+
+        if (input_failsafe || app_estop) {
+            transition(SafetyState::StopRequested,
+                       app_estop ? "app_estop" : "input_failsafe");
+            return;
+        }
+
+        transition(command_requested ? SafetyState::Running : SafetyState::Ready,
+                   command_requested ? "motion_permitted" : "no_motion_request");
+    }
+
+    SafetyState state() const { return state_; }
+    bool motionAllowed() const { return state_ == SafetyState::Running; }
+    bool stopRequired() const {
+        return state_ == SafetyState::StopRequested ||
+               state_ == SafetyState::LatchedFault;
+    }
+    bool latchedFault() const { return state_ == SafetyState::LatchedFault; }
+    const std::string& reason() const { return reason_; }
+
+private:
+    void transition(SafetyState next, const std::string& reason) {
+        if (state_ == next && reason_ == reason) return;
+        const SafetyState previous = state_;
+        state_ = next;
+        reason_ = reason;
+        std::cout << "SAFETY_STATE from=" << safetyStateName(previous)
+                  << " to=" << safetyStateName(state_)
+                  << " reason=" << reason_ << std::endl;
+    }
+
+    void latchFault(const std::string& reason) {
+        transition(SafetyState::LatchedFault, reason);
+    }
+
+    SafetyState state_{SafetyState::Init};
+    std::string reason_{"startup"};
+};
+
+class SbusReader {
+public:
+    explicit SbusReader(const std::string& device) {
+        fd_ = ::open(device.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if (fd_ < 0) throw std::runtime_error("cannot open SBUS device: " + device);
+        termios2 tio{};
+        if (::ioctl(fd_, TCGETS2, &tio) < 0) throw std::runtime_error("TCGETS2 failed");
+        tio.c_iflag = IGNPAR;
+        tio.c_oflag = 0;
+        tio.c_lflag = 0;
+        tio.c_cflag &= ~(CBAUD | CSIZE | PARODD);
+        tio.c_cflag |= BOTHER | CS8 | PARENB | CSTOPB | CLOCAL | CREAD;
+        tio.c_ispeed = 100000;
+        tio.c_ospeed = 100000;
+        tio.c_cc[VMIN] = 0;
+        tio.c_cc[VTIME] = 0;
+        if (::ioctl(fd_, TCSETS2, &tio) < 0) throw std::runtime_error("TCSETS2 failed");
+    }
+    ~SbusReader() { if (fd_ >= 0) ::close(fd_); }
+
+    bool poll(SbusFrame& output) {
+        uint8_t input[128];
+        bool got_frame = false;
+        for (;;) {
+            const auto n = ::read(fd_, input, sizeof(input));
+            if (n <= 0) break;
+            for (ssize_t i = 0; i < n; ++i) {
+                if (position_ == 0) {
+                    if (input[i] != 0x0f) continue;
+                    buffer_[position_++] = input[i];
+                } else {
+                    buffer_[position_++] = input[i];
+                    if (position_ == buffer_.size()) {
+                        if (decode(output)) got_frame = true;
+                        position_ = 0;
+                    }
+                }
+            }
+        }
+        return got_frame;
+    }
+
+private:
+    bool decode(SbusFrame& out) const {
+        if (buffer_[0] != 0x0f) return false;
+        for (int ch = 0; ch < 16; ++ch) {
+            const int bit = ch * 11;
+            const int byte_index = 1 + bit / 8;
+            const int shift = bit % 8;
+            uint32_t value = buffer_[byte_index];
+            if (byte_index + 1 < 23) value |= static_cast<uint32_t>(buffer_[byte_index + 1]) << 8;
+            if (byte_index + 2 < 23) value |= static_cast<uint32_t>(buffer_[byte_index + 2]) << 16;
+            out.channel[ch] = static_cast<uint16_t>((value >> shift) & 0x07ff);
+        }
+        out.channel[16] = (buffer_[23] & 0x01) ? 2047 : 0;
+        out.channel[17] = (buffer_[23] & 0x02) ? 2047 : 0;
+        out.frame_lost = (buffer_[23] & 0x04) != 0;
+        out.failsafe = (buffer_[23] & 0x08) != 0;
+        return true;
+    }
+
+    int fd_{-1};
+    std::array<uint8_t, 25> buffer_{};
+    std::size_t position_{0};
+};
+
+int throttleDirection(uint16_t value, const Config& c) {
+    int direction = 0;
+    if (value <= c.low_threshold) direction = 1;      // default: low = forward
+    else if (value > c.high_threshold) direction = -1;
+    return c.throttle_invert ? -direction : direction;
+}
+
+int steeringDirection(uint16_t value, const Config& c) {
+    int direction = 0;
+    if (value <= c.low_threshold) direction = -1;     // default: low = right
+    else if (value > c.high_threshold) direction = 1; // default: high = left
+    return c.steering_invert ? -direction : direction;
+}
+
+// Preserve the existing deadband/direction decoding, but recover the stick
+// magnitude for moving turns. Standard SBUS endpoints are approximately
+// 172..1811; values outside the configured deadband map continuously to 0..1.
+double sbusAxisMagnitude(uint16_t value, const Config& c) {
+    constexpr double kSbusMin = 172.0;
+    constexpr double kSbusMax = 1811.0;
+    if (value <= c.low_threshold) {
+        const double span = std::max(1.0, static_cast<double>(c.low_threshold) - kSbusMin);
+        return std::clamp((static_cast<double>(c.low_threshold) - value) / span, 0.0, 1.0);
+    }
+    if (value > c.high_threshold) {
+        const double span = std::max(1.0, kSbusMax - static_cast<double>(c.high_threshold));
+        return std::clamp((value - static_cast<double>(c.high_threshold)) / span, 0.0, 1.0);
+    }
+    return 0.0;
+}
+
+// ----------------------------------------------------------------------------
+// 3. IMU yaw interface. Used by straight heading hold and arc assistance.
+// ----------------------------------------------------------------------------
+class ImuYaw {
+public:
+    explicit ImuYaw(const Config& c)
+        : raw_path_(c.imu_device + "/in_anglvel_" + c.imu_axis + "_raw"),
+          scale_path_(c.imu_device + "/in_anglvel_scale"),
+          yaw_sign_(c.imu_yaw_sign), deadband_dps_(c.imu_deadband_dps),
+          max_rate_dps_(c.imu_max_rate_dps), max_yaw_step_deg_(c.imu_max_yaw_step_deg),
+          calibrate_ms_(c.imu_calibrate_ms) {
+        // IMU is optional for basic drive operation. Do not touch IIO
+        // files when heading control is disabled. The board BMI088
+        // driver exposes raw gyro values and gyr_config, but not the
+        // standard in_anglvel_scale attribute.
+        if (c.imu_heading_enable) {
+            scale_ = readGyroScale(c.imu_device);
+            std::cout << "IMU gyro scale=" << scale_
+                      << " rad/s/LSB" << std::endl;
+        }
+    }
+
+    void calibrate() {
+        double sum = 0.0;
+        int count = 0;
+        const auto end = std::chrono::steady_clock::now() +
+                         std::chrono::milliseconds(calibrate_ms_);
+        while (std::chrono::steady_clock::now() < end) {
+            sum += readNumber(raw_path_) * scale_;
+            ++count;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        if (count == 0) throw std::runtime_error("IMU calibration failed");
+        bias_rad_s_ = sum / count;
+        yaw_deg_ = 0.0;
+        rate_dps_ = 0.0;
+        last_update_ = std::chrono::steady_clock::now();
+        valid_ = true;
+    }
+
+    void update() {
+        if (!valid_) return;
+        const auto now = std::chrono::steady_clock::now();
+        const double dt = std::chrono::duration<double>(now - last_update_).count();
+        last_update_ = now;
+        const double raw_rate = (readNumber(raw_path_) * scale_ - bias_rad_s_) *
+                                 (180.0 / 3.14159265358979323846) * yaw_sign_;
+        if (std::abs(raw_rate) > max_rate_dps_) {
+            rate_dps_ = 0.0;
+            const auto now_log = std::chrono::steady_clock::now();
+            if (now_log - last_reject_log_ > std::chrono::seconds(1)) {
+                std::cout << "IMU_RATE_REJECT raw_dps=" << raw_rate
+                          << " limit_dps=" << max_rate_dps_ << std::endl;
+                last_reject_log_ = now_log;
+            }
+            return;
+        }
+        double rate = raw_rate;
+        if (std::abs(rate) < deadband_dps_) rate = 0.0;
+        rate_dps_ = rate;
+        if (dt > 0.0 && dt < 0.5) {
+            const double raw_step = rate_dps_ * dt;
+            const double yaw_step = std::clamp(raw_step, -max_yaw_step_deg_, max_yaw_step_deg_);
+            if (std::abs(raw_step) > max_yaw_step_deg_) {
+                std::cout << "IMU_STEP_CLAMP raw_step_deg=" << raw_step
+                          << " limit_deg=" << max_yaw_step_deg_ << std::endl;
+            }
+            yaw_deg_ += yaw_step;
+        }
+    }
+
+    bool valid() const { return valid_; }
+    double yawDeg() const { return yaw_deg_; }
+    double rateDps() const { return rate_dps_; }
+    double biasDps() const {
+        return bias_rad_s_ * (180.0 / 3.14159265358979323846) * yaw_sign_;
+    }
+
+private:
+    static double readGyroScale(const std::string& device) {
+        const std::string standard_scale = device + "/in_anglvel_scale";
+        {
+            std::ifstream input(standard_scale);
+            double value = 0.0;
+            if ((input >> value) && value > 0.0) return value;
+        }
+
+        const std::string config_path = device + "/gyr_config";
+        std::ifstream config(config_path);
+        std::string line;
+        if (!std::getline(config, line))
+            throw std::runtime_error("cannot read IMU gyro scale or config: " + device);
+        const auto pos = line.find("range:");
+        if (pos == std::string::npos)
+            throw std::runtime_error("cannot parse BMI08x gyro range: " + line);
+        int range = -1;
+        try { range = std::stoi(line.substr(pos + 6)); }
+        catch (...) { throw std::runtime_error("cannot parse BMI08x gyro range: " + line); }
+
+        double full_scale_dps = 0.0;
+        switch (range) {
+            case 0: full_scale_dps = 2000.0; break;
+            case 1: full_scale_dps = 1000.0; break;
+            case 2: full_scale_dps = 500.0; break;
+            case 3: full_scale_dps = 250.0; break;
+            case 4: full_scale_dps = 125.0; break;
+            default:
+                throw std::runtime_error("unsupported BMI08x gyro range: " + std::to_string(range));
+        }
+        constexpr double kPi = 3.14159265358979323846;
+        return (full_scale_dps / 32768.0) * (kPi / 180.0);
+    }
+
+    static double readNumber(const std::string& path) {
+        std::ifstream input(path);
+        double value = 0.0;
+        if (!(input >> value)) throw std::runtime_error("cannot read IMU: " + path);
+        return value;
+    }
+
+    std::string raw_path_;
+    std::string scale_path_;
+    double yaw_sign_{-1.0};
+    double deadband_dps_{0.30};
+    double max_rate_dps_{180.0};
+    double max_yaw_step_deg_{4.0};
+    int calibrate_ms_{3000};
+    double scale_{0.0};
+    double bias_rad_s_{0.0};
+    double yaw_deg_{0.0};
+    double rate_dps_{0.0};
+    bool valid_{false};
+    std::chrono::steady_clock::time_point last_update_{};
+    std::chrono::steady_clock::time_point last_reject_log_{};
+};
+
+class OdometryCsvLogger {
+public:
+    OdometryCsvLogger() = default;
+
+    explicit OdometryCsvLogger(const std::string& path) {
+        open(path);
+    }
+
+    void open(const std::string& path) {
+        if (path.empty()) return;
+        file_.open(path, std::ios::out | std::ios::trunc);
+        if (!file_) throw std::runtime_error("cannot open odometry log: " + path);
+        file_ << "time_s,x_m,y_m,yaw_deg,v_mps,w_dps,fl_rpm,rl_rpm,fr_rpm,rr_rpm\n";
+        enabled_ = true;
+    }
+
+    void write(double time_s, const Pose2D& pose, const Odometry& odom,
+               const std::array<double, 4>& wheel_rpm) {
+        if (!enabled_) return;
+        file_ << time_s << ','
+              << pose.x_m << ','
+              << pose.y_m << ','
+              << pose.yaw_deg << ','
+              << odom.linearSpeedMps() << ','
+              << odom.angularSpeedDps() << ','
+              << wheel_rpm[0] << ','
+              << wheel_rpm[1] << ','
+              << wheel_rpm[2] << ','
+              << wheel_rpm[3] << '\n';
+        if (++pending_flush_ >= flush_every_) {
+            file_.flush();
+            pending_flush_ = 0;
+        }
+    }
+
+    void close() {
+        if (file_.is_open()) {
+            file_.flush();
+            file_.close();
+        }
+        enabled_ = false;
+    }
+
+    ~OdometryCsvLogger() { close(); }
+
+private:
+    std::ofstream file_;
+    bool enabled_{false};
+    int pending_flush_{0};
+    const int flush_every_{20};
+};
+
+struct GearProfile {
+    const char* name;
+    int run_rpm;
+    int turn_max_rpm;
+};
+
+GearProfile gearProfileFromName(const std::string& name, const Config& c) {
+    if (name == "LOW" || name == "low") {
+        return {"LOW", c.gear_low_run_rpm, c.gear_low_turn_max_rpm};
+    }
+    if (name == "HIGH" || name == "high") {
+        return {"HIGH", c.gear_high_run_rpm, c.gear_high_turn_max_rpm};
+    }
+    return {"MID", c.gear_mid_run_rpm, c.gear_mid_turn_max_rpm};
+}
+
+struct AppCommand {
+    bool valid{false};
+    bool mode_valid{false};
+    bool enable{false};
+    bool estop{false};
+    bool mower_on{false};
+    int throttle{0};
+    int steering{0};
+    std::string gear{"MID"};
+    std::string mode{"manual"};
+    std::chrono::steady_clock::time_point last_update{};
+};
+
+class AppControlReceiver {
+public:
+    AppControlReceiver(bool enabled, int port) : enabled_(enabled) {
+        if (!enabled_) return;
+        fd_ = ::socket(AF_INET, SOCK_DGRAM, 0);
+        if (fd_ < 0) throw std::runtime_error("cannot create APP UDP socket");
+        int opt = 1;
+        ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        addr.sin_port = htons(static_cast<uint16_t>(port));
+        if (::bind(fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
+            throw std::runtime_error("cannot bind APP UDP port " + std::to_string(port));
+        }
+        const int flags = ::fcntl(fd_, F_GETFL, 0);
+        ::fcntl(fd_, F_SETFL, flags | O_NONBLOCK);
+        std::cout << "APP control UDP enabled port=" << port << std::endl;
+    }
+    ~AppControlReceiver() { if (fd_ >= 0) ::close(fd_); }
+
+    void poll() {
+        if (!enabled_ || fd_ < 0) return;
+        char buf[512];
+        for (;;) {
+            const ssize_t n = ::recv(fd_, buf, sizeof(buf) - 1, 0);
+            if (n <= 0) break;
+            buf[n] = '\0';
+            parse(std::string(buf, static_cast<std::size_t>(n)));
+        }
+    }
+
+    const AppCommand& command() const { return cmd_; }
+
+private:
+    static int extractInt(const std::string& msg, const std::string& key, int fallback) {
+        auto pos = msg.find(key);
+        if (pos == std::string::npos) return fallback;
+        pos = msg.find_first_of(":=", pos + key.size());
+        if (pos == std::string::npos) return fallback;
+        ++pos;
+        while (pos < msg.size() && (msg[pos] == ' ' || msg[pos] == '\"')) ++pos;
+        try { return std::stoi(msg.substr(pos)); } catch (...) { return fallback; }
+    }
+
+    static std::string extractString(const std::string& msg, const std::string& key, const std::string& fallback) {
+        auto pos = msg.find(key);
+        if (pos == std::string::npos) return fallback;
+        pos = msg.find_first_of(":=", pos + key.size());
+        if (pos == std::string::npos) return fallback;
+        ++pos;
+        while (pos < msg.size() && (msg[pos] == ' ' || msg[pos] == '\"')) ++pos;
+        std::string out;
+        while (pos < msg.size()) {
+            const char ch = msg[pos++];
+            if (!(std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' || ch == '-')) break;
+            out.push_back(ch);
+        }
+        return out.empty() ? fallback : out;
+    }
+
+    void parse(const std::string& msg) {
+        cmd_.enable = extractInt(msg, "enable", cmd_.enable ? 1 : 0) != 0;
+        cmd_.estop = extractInt(msg, "estop", cmd_.estop ? 1 : 0) != 0;
+        cmd_.mower_on = extractInt(msg, "mower", cmd_.mower_on ? 1 : 0) != 0;
+        cmd_.throttle = std::clamp(extractInt(msg, "throttle", cmd_.throttle), -1, 1);
+        cmd_.steering = std::clamp(extractInt(msg, "steering", cmd_.steering), -1, 1);
+        cmd_.gear = extractString(msg, "gear", cmd_.gear);
+        const auto mode_pos = msg.find("mode");
+        if (mode_pos != std::string::npos) {
+            const std::string parsed_mode = extractString(msg, "mode", cmd_.mode);
+            if (parsed_mode == "manual" || parsed_mode == "autonomous") {
+                cmd_.mode = parsed_mode;
+                cmd_.mode_valid = true;
+            }
+        }
+        cmd_.valid = true;
+        cmd_.last_update = std::chrono::steady_clock::now();
+    }
+
+    bool enabled_{false};
+    int fd_{-1};
+    AppCommand cmd_{};
+};
+
+GearProfile gearProfileFromSbus(uint16_t value, const Config& c) {
+    if (!c.gear_select_enable) return {"CONFIG", c.run_rpm, c.turn_max_rpm};
+    if (value <= c.low_threshold) {
+        return {"LOW", c.gear_low_run_rpm, c.gear_low_turn_max_rpm};
+    }
+    if (value >= c.high_threshold) {
+        return {"HIGH", c.gear_high_run_rpm, c.gear_high_turn_max_rpm};
+    }
+    return {"MID", c.gear_mid_run_rpm, c.gear_mid_turn_max_rpm};
+}
+
+
+// ----------------------------------------------------------------------------
+// ROS 2 adapter (v4): the safety exit consumes /safety/safe_motion_command
+// directly, validates it inside the chassis process and publishes ChassisState.
+// Legacy /cmd_vel is kept for compatibility but disabled by default.
+// ----------------------------------------------------------------------------
+struct RosMotionCommand {
+    bool fresh{false};
+    double linear_x{0.0};
+    double angular_z{0.0};
+    bool estop{false};
+    bool latched{false};
+    std::string reason{"NO_COMMAND"};
+};
+
+class Ros2Interface : public std::enable_shared_from_this<Ros2Interface> {
+public:
+    Ros2Interface(const Config& config, bool dry_run)
+        : max_linear_mps_(config.ros_max_linear_mps),
+          max_angular_radps_(config.ros_max_angular_radps),
+          max_ttl_s_(config.ros_safe_command_max_ttl_s),
+          safe_command_enabled_(config.ros_safe_command_enable),
+          legacy_cmd_vel_enabled_(config.legacy_cmd_vel_enable),
+          dry_run_(dry_run),
+          node_(std::make_shared<rclcpp::Node>("laifei_chassis_driver")),
+          odom_pub_(node_->create_publisher<nav_msgs::msg::Odometry>("/odom", 10)),
+          state_pub_(node_->create_publisher<navigation_interfaces::msg::ChassisState>(
+              "/chassis/state", 10)),
+          tf_broadcaster_(std::make_shared<tf2_ros::TransformBroadcaster>(node_)) {
+        if (safe_command_enabled_) {
+            safe_sub_ = node_->create_subscription<navigation_interfaces::msg::SafeMotionCommand>(
+                "/safety/safe_motion_command", 10,
+                [this](const navigation_interfaces::msg::SafeMotionCommand::SharedPtr msg) {
+                    onSafeCommand(msg);
+                });
+        }
+        // Legacy entry is kept but ignored unless explicitly enabled.
+        cmd_sub_ = node_->create_subscription<geometry_msgs::msg::Twist>(
+            "/cmd_vel", 10,
+            [this](const geometry_msgs::msg::Twist::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                legacy_linear_x_ = msg->linear.x;
+                legacy_angular_z_ = msg->angular.z;
+                legacy_time_ = std::chrono::steady_clock::now();
+            });
+        const auto mode_callback =
+            [this](const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                   std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+                applyMode(request, response);
+            };
+        mode_service_ = node_->create_service<std_srvs::srv::SetBool>(
+            "/chassis/set_autonomous_mode", mode_callback);
+        legacy_mode_service_ = node_->create_service<std_srvs::srv::SetBool>(
+            "/set_autonomous_mode", mode_callback);
+        RCLCPP_INFO(node_->get_logger(),
+                    "ROS 2 chassis v4 ready: safe_cmd=%d legacy_cmd_vel=%d dry_run=%d",
+                    safe_command_enabled_ ? 1 : 0, legacy_cmd_vel_enabled_ ? 1 : 0,
+                    dry_run_ ? 1 : 0);
+    }
+
+    void start() {
+        spin_thread_ = std::thread([this]() { rclcpp::spin(node_); });
+    }
+
+    void stop() {
+        shutdownOnce();
+    }
+
+    ~Ros2Interface() { shutdownOnce(); }
+
+    // ----------------------------------------------------------- safety exit
+    RosMotionCommand motion(std::chrono::steady_clock::time_point now,
+                            bool feedback_ok, bool can_healthy) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        RosMotionCommand out;
+        if (!autonomous_mode_.load()) { out.reason = "AUTONOMOUS_MODE_DISABLED"; return out; }
+        if (dry_run_) { feedback_ok = true; can_healthy = true; }
+        if (latched_.load()) {
+            out.latched = true;
+            out.estop = (fault_reason_ == "SAFE_COMMAND_ESTOP");
+            out.reason = fault_reason_;
+            return out;
+        }
+        if (!feedback_ok) { out.reason = "CHASSIS_FEEDBACK_LOST"; latchLocked(out.reason); return out; }
+        if (!can_healthy) { out.reason = "CAN_FAULT"; latchLocked(out.reason); return out; }
+        if (safe_command_enabled_ && safe_received_) {
+            const double age = std::chrono::duration<double>(now - safe_command_time_).count();
+            command_age_s_ = age;
+            double ttl = max_ttl_s_;
+            if (std::isfinite(safe_ttl_s_) && safe_ttl_s_ > 0.0) ttl = std::min(ttl, safe_ttl_s_);
+            if (age > ttl) { out.reason = "SAFE_COMMAND_TIMEOUT"; latchLocked(out.reason); return out; }
+            if (safe_estop_) { out.estop = true; out.reason = "SAFE_COMMAND_ESTOP"; latchLocked(out.reason); return out; }
+            if (sequence_fault_) { out.reason = "NON_MONOTONIC_SEQUENCE"; return out; }
+            if (!safe_enable_) { out.reason = "SAFE_COMMAND_DISABLED"; return out; }
+            if (safe_stop_required_) { out.reason = "SAFE_COMMAND_STOP_REQUIRED"; return out; }
+            const double lin = safe_linear_x_;
+            const double ang = safe_angular_z_;
+            if (!std::isfinite(lin) || !std::isfinite(ang)) { out.reason = "SAFE_COMMAND_NONFINITE"; return out; }
+            if (std::abs(lin) < 1e-6 && std::abs(ang) > 1e-3) {
+                out.reason = "ZERO_RADIUS_ROTATION_REJECTED";
+                return out;
+            }
+            if (std::abs(lin) > max_linear_mps_ + 1e-9 ||
+                std::abs(ang) > max_angular_radps_ + 1e-9) {
+                out.reason = "SAFE_COMMAND_OVER_LIMIT";
+                return out;
+            }
+            out.linear_x = lin;
+            out.angular_z = ang;
+            out.fresh = true;
+            out.reason = "APPROVED";
+            return out;
+        }
+        if (legacy_cmd_vel_enabled_) {
+            const double age = std::chrono::duration<double>(now - legacy_time_).count();
+            if (age <= 0.30) {
+                const double lin = legacy_linear_x_;
+                const double ang = legacy_angular_z_;
+                if (std::abs(lin) < 1e-6 && std::abs(ang) > 1e-3) {
+                    out.reason = "ZERO_RADIUS_ROTATION_REJECTED";
+                    return out;
+                }
+                if (std::abs(lin) > max_linear_mps_ + 1e-9 ||
+                    std::abs(ang) > max_angular_radps_ + 1e-9) {
+                    out.reason = "LEGACY_CMD_OVER_LIMIT";
+                    return out;
+                }
+                out.linear_x = lin;
+                out.angular_z = ang;
+                out.fresh = true;
+                out.reason = "APPROVED_LEGACY";
+                return out;
+            }
+            out.reason = "LEGACY_CMD_TIMEOUT";
+            return out;
+        }
+        out.reason = safe_command_enabled_ ? "NO_SAFE_COMMAND" : "NO_MOTION_SOURCE";
+        return out;
+    }
+
+    std::string faultReason() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return fault_reason_;
+    }
+
+    bool autonomousMode() const { return autonomous_mode_.load(); }
+    void setAutonomousMode(bool enabled) { autonomous_mode_.store(enabled); }
+
+    void publishChassisState(double linear_velocity, double angular_velocity,
+                             const std::array<double, 4>& wheel_rpm,
+                             bool feedback_ok, bool can_healthy,
+                             bool motion_allowed, bool emergency_stop,
+                             const std::string& safety_state,
+                             const std::string& fault_reason) {
+        navigation_interfaces::msg::ChassisState msg;
+        msg.header.stamp = node_->now();
+        msg.header.frame_id = "base_link";
+        msg.control_mode = autonomous_mode_.load() ? "AUTONOMOUS" : "MANUAL";
+        msg.motion_allowed = motion_allowed;
+        msg.emergency_stop = emergency_stop;
+        msg.can_healthy = can_healthy;
+        msg.feedback_valid = feedback_ok;
+        msg.linear_velocity = linear_velocity;
+        msg.angular_velocity = angular_velocity;
+        for (std::size_t i = 0; i < 4; ++i) msg.wheel_rpm[i] = wheel_rpm[i];
+        msg.safety_state = safety_state;
+        msg.fault_reason = fault_reason;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            msg.command_age_s = command_age_s_;
+        }
+        state_pub_->publish(msg);
+    }
+
+    void publishOdometry(const Pose2D& pose, double linear_speed_mps,
+                         double angular_speed_dps, const rclcpp::Time& stamp) {
+        const double yaw_rad = pose.yaw_deg * 3.14159265358979323846 / 180.0;
+        const double half = yaw_rad * 0.5;
+        nav_msgs::msg::Odometry msg;
+        msg.header.stamp = stamp;
+        msg.header.frame_id = "odom";
+        msg.child_frame_id = "base_link";
+        // 底盘内部里程计为镜像坐标（前进 = -x、左转 = 负 yaw），
+        // 对外发布统一按 ROS 约定（前进 = +x、左转 = +yaw）修正。
+        msg.pose.pose.position.x = -pose.x_m;
+        msg.pose.pose.position.y = pose.y_m;
+        msg.pose.pose.orientation.z = -std::sin(half);
+        msg.pose.pose.orientation.w = std::cos(half);
+        msg.twist.twist.linear.x = -linear_speed_mps;
+        msg.twist.twist.angular.z = -angular_speed_dps * 3.14159265358979323846 / 180.0;
+        odom_pub_->publish(msg);
+        geometry_msgs::msg::TransformStamped tf;
+        tf.header = msg.header;
+        tf.child_frame_id = msg.child_frame_id;
+        tf.transform.translation.x = -pose.x_m;
+        tf.transform.translation.y = pose.y_m;
+        tf.transform.rotation = msg.pose.pose.orientation;
+        tf_broadcaster_->sendTransform(tf);
+    }
+
+    rclcpp::Node::SharedPtr node() const { return node_; }
+
+private:
+    void onSafeCommand(const navigation_interfaces::msg::SafeMotionCommand::SharedPtr msg) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (safe_received_ && msg->sequence <= safe_sequence_) {
+            sequence_fault_ = true;
+            RCLCPP_WARN(node_->get_logger(),
+                        "safe_cmd non-monotonic sequence %llu <= %llu",
+                        static_cast<unsigned long long>(msg->sequence),
+                        static_cast<unsigned long long>(safe_sequence_));
+            return;
+        }
+        safe_received_ = true;
+        sequence_fault_ = false;
+        safe_sequence_ = msg->sequence;
+        safe_linear_x_ = msg->linear_x;
+        safe_angular_z_ = msg->angular_z;
+        safe_ttl_s_ = msg->ttl_s;
+        safe_enable_ = msg->enable;
+        safe_stop_required_ = msg->stop_required;
+        safe_estop_ = msg->emergency_stop;
+        safe_command_time_ = std::chrono::steady_clock::now();
+        if (safe_estop_) latchLocked("SAFE_COMMAND_ESTOP");
+    }
+
+    void applyMode(const std::shared_ptr<std_srvs::srv::SetBool::Request> request,
+                   std::shared_ptr<std_srvs::srv::SetBool::Response> response) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const bool enabled = request->data;
+        autonomous_mode_.store(enabled);
+        if (enabled) {
+            latched_.store(false);
+            fault_reason_.clear();
+            sequence_fault_ = false;
+            safe_received_ = false;
+            safe_sequence_ = 0;
+            safe_command_time_ = std::chrono::steady_clock::now();
+            command_age_s_ = 0.0;
+        } else {
+            safe_received_ = false;
+            legacy_time_ = std::chrono::steady_clock::time_point{};
+        }
+        response->success = true;
+        response->message = enabled ?
+            "autonomous mode enabled; SafeMotionCommand accepted" :
+            "autonomous mode disabled; motion output zero";
+        RCLCPP_WARN(node_->get_logger(), "%s", response->message.c_str());
+    }
+
+    void shutdownOnce() {
+        if (stopped_.exchange(true)) return;
+        if (rclcpp::ok()) rclcpp::shutdown();
+        if (spin_thread_.joinable()) spin_thread_.join();
+    }
+
+    // Caller must hold mutex_.
+    void latchLocked(const std::string& reason) {
+        if (!latched_.load()) {
+            latched_.store(true);
+            fault_reason_ = reason;
+            RCLCPP_ERROR(node_->get_logger(), "chassis safety latch: %s", reason.c_str());
+        }
+    }
+
+    const double max_linear_mps_;
+    const double max_angular_radps_;
+    const double max_ttl_s_;
+    const bool safe_command_enabled_;
+    const bool legacy_cmd_vel_enabled_;
+    const bool dry_run_;
+    rclcpp::Node::SharedPtr node_;
+    rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+    rclcpp::Publisher<navigation_interfaces::msg::ChassisState>::SharedPtr state_pub_;
+    rclcpp::Subscription<navigation_interfaces::msg::SafeMotionCommand>::SharedPtr safe_sub_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_sub_;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr mode_service_;
+    rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr legacy_mode_service_;
+    std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::thread spin_thread_;
+    std::atomic<bool> stopped_{false};
+    mutable std::mutex mutex_;
+    std::atomic<bool> autonomous_mode_{false};
+    std::atomic<bool> latched_{false};
+    std::string fault_reason_;
+    bool safe_received_{false};
+    bool sequence_fault_{false};
+    uint64_t safe_sequence_{0};
+    double safe_linear_x_{0.0};
+    double safe_angular_z_{0.0};
+    double safe_ttl_s_{0.0};
+    bool safe_enable_{false};
+    bool safe_stop_required_{true};
+    bool safe_estop_{false};
+    std::chrono::steady_clock::time_point safe_command_time_{};
+    double command_age_s_{0.0};
+    double legacy_linear_x_{0.0};
+    double legacy_angular_z_{0.0};
+    std::chrono::steady_clock::time_point legacy_time_{};
+};
+
+// ----------------------------------------------------------------------------
+// 4. Chassis controller: rotation, moving turns, speed loop, and safety logic.
+// ----------------------------------------------------------------------------
+class Controller {
+public:
+    Controller(Config config, CanBus& can, ImuYaw* imu)
+        : c_(std::move(config)), can_(can), imu_(imu) {}
+
+    ~Controller() noexcept {
+        // Best-effort emergency stop during normal shutdown and exception
+        // unwinding.  Each motor is attempted independently so one CAN write
+        // failure does not prevent stop commands being sent to the others.
+        for (auto id : c_.motor_ids) {
+            try {
+                if (c_.wheel_control_mode == "speed") can_.speed(id, 0);
+                else can_.current(id, 0);
+            } catch (...) {
+            }
+        }
+        try {
+            can_.current(c_.mower_id, 0);
+        } catch (...) {
+        }
+    }
+
+    void heartbeatAll() {
+        for (auto id : c_.motor_ids) can_.heartbeat(id);
+        can_.heartbeat(c_.mower_id);
+    }
+
+    void setDriveMaxCurrent(int value_10ma, const char* reason) {
+        if (c_.wheel_control_mode != "speed") return;
+        value_10ma = std::clamp(value_10ma, 1, 1500);
+        if (active_closed_loop_max_current_ == value_10ma) return;
+        active_closed_loop_max_current_ = value_10ma;
+        for (auto id : c_.motor_ids) {
+            can_.setClosedLoopMaxCurrent(id, value_10ma);
+        }
+        if (c_.show_log) {
+            std::cout << "DRIVER_MAX_CURRENT_SET reason=" << reason
+                      << " value_10mA=" << value_10ma
+                      << " amp=" << value_10ma * 0.01
+                      << std::endl;
+        }
+    }
+
+    void setWheelFeedback(const std::array<double, 4>& rpm,
+                          const std::array<bool, 4>& valid,
+                          const std::array<uint64_t, 4>& generation) {
+        measured_rpm_ = rpm;
+        feedback_valid_ = valid;
+        feedback_generation_ = generation;
+        for (std::size_t i = 0; i < 4; ++i) {
+            if (valid[i]) feedback_ever_seen_[i] = true;
+        }
+    }
+
+    void setOdometryY(double y_m) {
+        odom_y_m_ = y_m;
+        odom_y_valid_ = true;
+    }
+
+    void setOdometryPose(double x_m, double y_m, double yaw_deg) {
+        odom_x_m_ = x_m;
+        odom_y_m_ = y_m;
+        odom_yaw_deg_ = yaw_deg;
+        odom_pose_valid_ = true;
+        odom_y_valid_ = true;
+    }
+
+    const std::array<double, 4>& wheelTargets() const { return ramped_target_rpm_; }
+    const std::array<int, 4>& wheelCurrents() const { return wheel_current_10ma_; }
+    bool wheelSafetyLatched() const { return wheel_safety_latched_; }
+    const std::string& wheelSafetyReason() const { return wheel_safety_reason_; }
+
+    void setGear(const GearProfile& gear) {
+        const bool changed = gear.name != current_gear_name_ ||
+                             gear.run_rpm != c_.run_rpm ||
+                             gear.turn_max_rpm != c_.turn_max_rpm;
+        c_.run_rpm = gear.run_rpm;
+        c_.turn_max_rpm = gear.turn_max_rpm;
+        current_gear_name_ = gear.name;
+        if (changed && c_.show_log) {
+            std::cout << "GEAR_SELECT name=" << current_gear_name_
+                      << " run_rpm=" << c_.run_rpm
+                      << " turn_max_rpm=" << c_.turn_max_rpm
+                      << " inner_ratio=" << c_.turn_inner_ratio
+                      << std::endl;
+        }
+    }
+
+    void resetHeadingTarget(const char* reason) {
+        if (heading_target_valid_ && c_.show_log) {
+            std::cout << "HEADING_TARGET_RESET reason=" << reason
+                      << " yaw=" << (imu_ ? imu_->yawDeg() : 0.0)
+                      << " old_target=" << target_yaw_deg_
+                      << " odom_y=" << (odom_y_valid_ ? odom_y_m_ : 0.0)
+                      << std::endl;
+        }
+        heading_target_valid_ = false;
+        lateral_target_valid_ = false;
+        heading_integral_forward_ = 0.0;
+        heading_integral_reverse_ = 0.0;
+        smoothed_applied_correction_ = 0;
+        heading_correction_smooth_valid_ = false;
+        smoothed_lateral_diff_correction_ = 0;
+        lateral_diff_smooth_valid_ = false;
+    }
+
+    void stopAll(bool reset_heading_target = false) {
+        heading_hold_active_ = false;
+        direction_change_hold_active_ = false;
+        direction_change_pending_throttle_ = 0;
+        direction_change_post_hold_start_ = {};
+        direction_change_post_hold_logged_ = false;
+        direction_change_settle_active_ = false;
+        last_motion_throttle_ = 0;
+        rotate_speed_loop_active_ = false;
+        if (reset_heading_target) resetHeadingTarget("stop_all");
+        heading_throttle_ = 0;
+        heading_integral_forward_ = 0.0;
+        heading_integral_reverse_ = 0.0;
+        smoothed_applied_correction_ = 0;
+        heading_correction_smooth_valid_ = false;
+        smoothed_lateral_diff_correction_ = 0;
+        lateral_diff_smooth_valid_ = false;
+        ramped_target_rpm_.fill(0.0);
+        wheel_integral_.fill(0.0);
+        wheel_current_10ma_.fill(0);
+        for (auto id : c_.motor_ids) {
+            if (c_.wheel_control_mode == "speed") can_.speed(id, 0);
+            else can_.current(id, 0);
+        }
+        can_.current(c_.mower_id, 0);
+    }
+
+    void apply(int throttle, int steering, bool mower_on, bool failsafe,
+               double throttle_magnitude = 1.0,
+               double steering_magnitude = 1.0) {
+        if (failsafe) {
+            stopAll(false);
+            logState(0, 0, false, true, 0, 0, false, 0.0, 0.0, 0);
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const bool straight_command = throttle != 0 && steering == 0;
+        const bool rotate_request = steering != 0 && throttle == 0;
+        if (rotate_request) {
+            if (!rotate_neutral_hold_active_) {
+                rotate_neutral_hold_active_ = true;
+                rotate_neutral_hold_start_ = now;
+                rotate_neutral_hold_logged_ = false;
+            }
+        } else {
+            rotate_neutral_hold_active_ = false;
+            rotate_neutral_hold_logged_ = false;
+            rotate_speed_guard_logged_ = false;
+            rotate_speed_guard_timeout_logged_ = false;
+        }
+        const bool rotate_command = rotate_request &&
+            now - rotate_neutral_hold_start_ >= std::chrono::milliseconds(c_.rotate_neutral_hold_ms);
+        if (rotate_request && !rotate_command && c_.show_log && !rotate_neutral_hold_logged_) {
+            std::cout << "ROTATE_NEUTRAL_HOLD wait_ms=" << c_.rotate_neutral_hold_ms << std::endl;
+            rotate_neutral_hold_logged_ = true;
+        }
+        if (c_.direction_change_hold_enable && straight_command &&
+            !direction_change_hold_active_ && last_motion_throttle_ != 0 &&
+            throttle != last_motion_throttle_) {
+            direction_change_hold_active_ = true;
+            direction_change_hold_start_ = now;
+            direction_change_pending_throttle_ = throttle;
+            direction_change_settle_active_ = false;
+            direction_change_post_hold_start_ = {};
+            direction_change_post_hold_logged_ = false;
+            heading_hold_active_ = false;
+            heading_integral_forward_ = 0.0;
+            heading_integral_reverse_ = 0.0;
+            if (c_.show_log) {
+                std::cout << "DIRECTION_CHANGE_HOLD start old="
+                          << last_motion_throttle_
+                          << " new=" << throttle
+                          << " stop_rpm<=" << c_.direction_change_stop_rpm
+                          << " timeout_ms=" << c_.direction_change_hold_timeout_ms
+                          << std::endl;
+            }
+        }
+
+        if (direction_change_hold_active_) {
+            const bool feedback_stopped =
+                std::all_of(feedback_valid_.begin(), feedback_valid_.end(),
+                            [](bool valid) { return valid; }) &&
+                std::all_of(measured_rpm_.begin(), measured_rpm_.end(),
+                            [this](double rpm) {
+                                return std::abs(rpm) <= c_.direction_change_stop_rpm;
+                            });
+            const bool timed_out =
+                now - direction_change_hold_start_ >=
+                std::chrono::milliseconds(c_.direction_change_hold_timeout_ms);
+            if (!direction_change_settle_active_ && !feedback_stopped && !timed_out) {
+                heading_hold_active_ = false;
+                heading_throttle_ = 0;
+                direction_change_post_hold_start_ = {};
+                applyWheelSpeedControl({0.0, 0.0, 0.0, 0.0});
+                can_.current(c_.mower_id, mower_on ? c_.cut_current : 0);
+                if (c_.show_log) {
+                    std::cout << "DIRECTION_CHANGE_HOLD waiting"
+                              << " rpm=" << measured_rpm_[0] << "/"
+                              << measured_rpm_[1] << "/"
+                              << measured_rpm_[2] << "/"
+                              << measured_rpm_[3]
+                              << std::endl;
+                }
+                return;
+            }
+
+            if (!direction_change_settle_active_ && timed_out) {
+                direction_change_hold_active_ = false;
+                last_motion_throttle_ = direction_change_pending_throttle_;
+                direction_change_post_hold_start_ = {};
+                direction_change_post_hold_logged_ = false;
+                direction_change_settle_active_ = false;
+                resetHeadingTarget("direction_change_timeout");
+                if (c_.show_log) {
+                    std::cout << "DIRECTION_CHANGE_HOLD release reason=timeout"
+                              << " rpm=" << measured_rpm_[0] << "/"
+                              << measured_rpm_[1] << "/"
+                              << measured_rpm_[2] << "/"
+                              << measured_rpm_[3] << std::endl;
+                }
+            } else {
+                // Once all wheels have crossed the stop threshold, enter a real zero-speed
+                // settle phase. Do not cancel this phase for small encoder/brake bounce;
+                // keep commanding zero, then recapture current IMU yaw for the next run.
+                if (!direction_change_settle_active_) {
+                    direction_change_settle_active_ = true;
+                    direction_change_post_hold_start_ = now;
+                    direction_change_post_hold_logged_ = false;
+                }
+                const bool settled =
+                    c_.direction_change_post_hold_ms <= 0 ||
+                    now - direction_change_post_hold_start_ >=
+                    std::chrono::milliseconds(c_.direction_change_post_hold_ms);
+                if (!settled) {
+                    heading_hold_active_ = false;
+                    heading_throttle_ = 0;
+                    applyWheelSpeedControl({0.0, 0.0, 0.0, 0.0});
+                    can_.current(c_.mower_id, mower_on ? c_.cut_current : 0);
+                    if (c_.show_log && !direction_change_post_hold_logged_) {
+                        std::cout << "DIRECTION_CHANGE_SETTLE zero_hold_ms="
+                                  << c_.direction_change_post_hold_ms
+                                  << " rpm=" << measured_rpm_[0] << "/"
+                                  << measured_rpm_[1] << "/"
+                                  << measured_rpm_[2] << "/"
+                                  << measured_rpm_[3] << std::endl;
+                        direction_change_post_hold_logged_ = true;
+                    }
+                    return;
+                }
+
+                direction_change_hold_active_ = false;
+                last_motion_throttle_ = direction_change_pending_throttle_;
+                direction_change_post_hold_start_ = {};
+                direction_change_post_hold_logged_ = false;
+                direction_change_settle_active_ = false;
+                resetHeadingTarget("direction_change_stopped_settled");
+                if (c_.show_log) {
+                    std::cout << "DIRECTION_CHANGE_HOLD release reason=stopped_settled"
+                              << " rpm=" << measured_rpm_[0] << "/"
+                              << measured_rpm_[1] << "/"
+                              << measured_rpm_[2] << "/"
+                              << measured_rpm_[3] << std::endl;
+                }
+            }
+
+        } else if (straight_command) {
+            last_motion_throttle_ = throttle;
+        }
+
+        double left = 0.0;
+        double right = 0.0;
+        int rpm_limit = c_.run_rpm;
+
+        if (rotate_command) {
+            heading_hold_active_ = false;
+            maybeResetHeadingForSteering();
+            heading_throttle_ = 0;
+            smoothed_applied_correction_ = 0;
+            heading_correction_smooth_valid_ = false;
+            direction_change_hold_active_ = false;
+            direction_change_pending_throttle_ = 0;
+            direction_change_post_hold_start_ = {};
+            direction_change_post_hold_logged_ = false;
+            direction_change_settle_active_ = false;
+            arc_turn_blend_active_ = false;
+            arc_turn_blend_key_ = 0;
+            arc_turn_blend_logged_ = false;
+            last_motion_throttle_ = 0;
+            if (c_.rotate_in_place_enable) {
+                rpm_limit = c_.rotate_rpm;
+                // steering > 0 is ROTATE LEFT, steering < 0 is ROTATE RIGHT.
+                // In-place rotation: left and right wheels run opposite
+                // directions with equal magnitude, so the chassis turns
+                // around its center instead of driving forward/backward.
+                const double rotate = static_cast<double>(
+                    steering * c_.rotate_direction_sign);
+                left = -rotate;
+                right = rotate;
+            }
+        } else if (throttle != 0) {
+            const auto arc = computeArcThrottleTargets(
+                throttle, steering, throttle_magnitude, steering_magnitude, now);
+            left = arc.left;
+            right = arc.right;
+            rpm_limit = arc.rpm_limit;
+        } else {
+            // Neutral throttle keeps the previous straight-line target.
+            heading_hold_active_ = false;
+            heading_throttle_ = 0;
+            arc_turn_blend_active_ = false;
+            arc_turn_blend_key_ = 0;
+            arc_turn_blend_logged_ = false;
+        }
+
+        int left_rpm = static_cast<int>(std::lround(left * rpm_limit));
+        int right_rpm = static_cast<int>(std::lround(right * rpm_limit));
+        bool heading_holding = false;
+        double heading_error = 0.0;
+        int heading_correction = 0;
+
+        if (throttle != 0 && steering == 0 && imu_ && imu_->valid()) {
+            // Keep one straight-line heading target across forward/reverse
+            // changes and short neutral pauses.  Otherwise a small yaw error
+            // at the end of a forward run becomes the new reverse target, so
+            // repeated back-and-forth motion walks away from the start line.
+            // The target is reset only by an intentional steering command.
+            steering_reset_candidate_active_ = false;
+            if (!heading_target_valid_) {
+                target_yaw_deg_ = imu_->yawDeg();
+                lateral_target_y_m_ = odom_y_valid_ ? odom_y_m_ : 0.0;
+                lateral_target_valid_ = odom_y_valid_;
+                heading_target_valid_ = true;
+                if (c_.show_log) {
+                    std::cout << "HEADING_TARGET_SET reason=first_straight"
+                              << " yaw=" << target_yaw_deg_
+                              << " odom_y=" << (odom_y_valid_ ? odom_y_m_ : 0.0)
+                              << std::endl;
+                }
+            }
+            const bool new_straight_segment = !heading_hold_active_ || heading_throttle_ != throttle;
+            if (new_straight_segment) {
+                heading_hold_start_ = now;
+            }
+            if (new_straight_segment && odom_y_valid_) {
+                // Keep the yaw target across short pauses / forward-reverse changes,
+                // but re-capture the lateral reference for each new straight segment.
+                // Otherwise back-and-forth tests keep pulling toward an old y line and
+                // the lateral hold can over-correct the next run.
+                lateral_target_y_m_ = odom_y_m_;
+                lateral_target_valid_ = true;
+                smoothed_lateral_diff_correction_ = 0;
+                lateral_diff_smooth_valid_ = false;
+                if (c_.show_log) {
+                    std::cout << "LATERAL_TARGET_SET reason=new_straight"
+                              << " y=" << lateral_target_y_m_
+                              << " throttle=" << throttle << std::endl;
+                }
+            }
+            heading_hold_active_ = true;
+            heading_throttle_ = throttle;
+            double effective_target_yaw_deg = target_yaw_deg_;
+            double lateral_error_m = 0.0;
+            double lateral_heading_deg = 0.0;
+            if (c_.lateral_hold_enable && lateral_target_valid_ && odom_y_valid_) {
+                lateral_error_m = odom_y_m_ - lateral_target_y_m_;
+                // Restore the original direction mapping, but keep the conservative
+                // lateral gain.  Positive odom-y now nudges the target yaw back toward
+                // the start line in the robot's odometry frame.
+                const double direction = throttle < 0 ? 1.0 : -1.0;
+                lateral_heading_deg = std::clamp(
+                    direction * c_.lateral_kp_deg_per_m * lateral_error_m,
+                    -c_.lateral_max_heading_deg, c_.lateral_max_heading_deg);
+                effective_target_yaw_deg += lateral_heading_deg;
+                while (effective_target_yaw_deg > 180.0) effective_target_yaw_deg -= 360.0;
+                while (effective_target_yaw_deg < -180.0) effective_target_yaw_deg += 360.0;
+                if (c_.show_log && std::abs(lateral_heading_deg) > 0.05) {
+                    std::cout << "LATERAL_HOLD y=" << odom_y_m_
+                              << " target_y=" << lateral_target_y_m_
+                              << " error_m=" << lateral_error_m
+                              << " yaw_bias_deg=" << lateral_heading_deg
+                              << " effective_target=" << effective_target_yaw_deg
+                              << std::endl;
+                }
+            }
+            heading_error = effective_target_yaw_deg - imu_->yawDeg();
+            while (heading_error > 180.0) heading_error -= 360.0;
+            while (heading_error < -180.0) heading_error += 360.0;
+            double& heading_integral = throttle > 0 ?
+                                       heading_integral_forward_ : heading_integral_reverse_;
+            heading_integral += heading_error * (static_cast<double>(c_.control_ms) / 1000.0);
+            if (c_.heading_ki > 0.0) {
+                const double integral_state_limit =
+                    static_cast<double>(c_.heading_integral_max_correction) / c_.heading_ki;
+                heading_integral = std::clamp(heading_integral,
+                                              -integral_state_limit,
+                                              integral_state_limit);
+            } else {
+                heading_integral = 0.0;
+            }
+            // Physical forward is negative logical throttle on this robot.
+            const double direction_trim = throttle < 0 ?
+                                          c_.heading_forward_trim : c_.heading_reverse_trim;
+            const double correction = c_.heading_kp * heading_error +
+                                      c_.heading_ki * heading_integral -
+                                      c_.heading_kd * imu_->rateDps() +
+                                      direction_trim;
+            // Reverse at high RPM has much less usable right-side headroom on this chassis.
+            // Use a separate reverse correction ceiling so heading hold can slow the
+            // easier side instead of endlessly asking the saturated side to exceed 70 RPM.
+            const int active_heading_max_correction = (throttle > 0 && c_.reverse_heading_max_correction > 0) ?
+                c_.reverse_heading_max_correction : c_.heading_max_correction;
+            heading_correction = static_cast<int>(std::lround(std::clamp(
+                correction, -static_cast<double>(active_heading_max_correction),
+                static_cast<double>(active_heading_max_correction))));
+            const bool heading_startup_hold =
+                c_.heading_startup_hold_ms > 0 &&
+                heading_hold_start_ != std::chrono::steady_clock::time_point{} &&
+                now - heading_hold_start_ < std::chrono::milliseconds(c_.heading_startup_hold_ms);
+            if (heading_startup_hold) {
+                heading_correction = 0;
+            }
+            const int active_min_correction_rpm = (throttle > 0 && c_.reverse_heading_min_correction_rpm > 0) ?
+                c_.reverse_heading_min_correction_rpm : c_.heading_min_correction_rpm;
+            const double active_error_boost_kp = (throttle > 0 && c_.reverse_heading_error_boost_kp > 0.0) ?
+                c_.reverse_heading_error_boost_kp : c_.heading_error_boost_kp;
+            const double active_min_correction_error_deg =
+                (throttle > 0 && c_.reverse_heading_min_correction_error_deg > 0.0) ?
+                c_.reverse_heading_min_correction_error_deg : c_.heading_min_correction_error_deg;
+            if (active_min_correction_error_deg > 0.0 &&
+                active_min_correction_rpm > 0 &&
+                std::abs(heading_error) >= active_min_correction_error_deg) {
+                const double over_error =
+                    std::abs(heading_error) - active_min_correction_error_deg;
+                const int requested_abs = active_min_correction_rpm +
+                    static_cast<int>(std::lround(over_error * active_error_boost_kp));
+                const int boosted_abs = std::min(active_heading_max_correction,
+                    std::max(std::abs(heading_correction), requested_abs));
+                heading_correction = heading_error >= 0.0 ? boosted_abs : -boosted_abs;
+            }
+            const int direction_correction_sign = throttle > 0 ?
+                c_.heading_reverse_correction_sign : c_.heading_correction_sign;
+            int applied_correction = heading_correction * direction_correction_sign;
+            const int active_slew_rpm_per_cycle = (throttle > 0 && c_.reverse_heading_correction_slew_rpm_per_cycle > 0) ?
+                c_.reverse_heading_correction_slew_rpm_per_cycle : c_.heading_correction_slew_rpm_per_cycle;
+            if (active_slew_rpm_per_cycle > 0) {
+                if (!heading_correction_smooth_valid_ || heading_throttle_ != throttle ||
+                    (smoothed_applied_correction_ > 0 && applied_correction < 0) ||
+                    (smoothed_applied_correction_ < 0 && applied_correction > 0)) {
+                    smoothed_applied_correction_ = 0;
+                    heading_correction_smooth_valid_ = true;
+                }
+                const int delta = applied_correction - smoothed_applied_correction_;
+                const int limited_delta = std::clamp(delta, -active_slew_rpm_per_cycle, active_slew_rpm_per_cycle);
+                smoothed_applied_correction_ += limited_delta;
+                if (c_.show_log && applied_correction != smoothed_applied_correction_) {
+                    std::cout << "HEADING_SMOOTH raw=" << applied_correction
+                              << " smoothed=" << smoothed_applied_correction_
+                              << " slew=" << active_slew_rpm_per_cycle << std::endl;
+                }
+                applied_correction = smoothed_applied_correction_;
+                heading_correction = applied_correction * direction_correction_sign;
+            } else {
+                smoothed_applied_correction_ = applied_correction;
+                heading_correction_smooth_valid_ = true;
+            }
+            if (c_.lateral_hold_enable && lateral_target_valid_ && odom_y_valid_ &&
+                c_.lateral_diff_kp_rpm_per_m > 0.0 && c_.lateral_diff_max_rpm > 0) {
+                // Positive lateral error means the robot has moved to +odom-y from
+                // the captured straight line. On this chassis the same correction
+                // direction that the yaw-bias loop requests is a negative applied
+                // correction, so use -K*y here. This directly creates a left/right
+                // RPM split instead of waiting for yaw error to build up.
+                int lateral_diff_correction = static_cast<int>(std::lround(std::clamp(
+                    -c_.lateral_diff_kp_rpm_per_m * lateral_error_m,
+                    -static_cast<double>(c_.lateral_diff_max_rpm),
+                    static_cast<double>(c_.lateral_diff_max_rpm))));
+                if (c_.lateral_diff_slew_rpm_per_cycle > 0) {
+                    if (!lateral_diff_smooth_valid_ || heading_throttle_ != throttle ||
+                        (smoothed_lateral_diff_correction_ > 0 && lateral_diff_correction < 0) ||
+                        (smoothed_lateral_diff_correction_ < 0 && lateral_diff_correction > 0)) {
+                        smoothed_lateral_diff_correction_ = 0;
+                        lateral_diff_smooth_valid_ = true;
+                    }
+                    const int delta = lateral_diff_correction - smoothed_lateral_diff_correction_;
+                    smoothed_lateral_diff_correction_ += std::clamp(
+                        delta, -c_.lateral_diff_slew_rpm_per_cycle,
+                        c_.lateral_diff_slew_rpm_per_cycle);
+                    lateral_diff_correction = smoothed_lateral_diff_correction_;
+                } else {
+                    smoothed_lateral_diff_correction_ = lateral_diff_correction;
+                    lateral_diff_smooth_valid_ = true;
+                }
+                if (lateral_diff_correction != 0) {
+                    applied_correction += lateral_diff_correction;
+                    applied_correction = std::clamp(
+                        applied_correction, -active_heading_max_correction,
+                        active_heading_max_correction);
+                    smoothed_applied_correction_ = applied_correction;
+                    heading_correction = applied_correction * direction_correction_sign;
+                    if (c_.show_log) {
+                        std::cout << "LATERAL_DIFF error_m=" << lateral_error_m
+                                  << " diff_rpm=" << lateral_diff_correction
+                                  << " applied=" << applied_correction
+                                  << std::endl;
+                    }
+                }
+            } else {
+                smoothed_lateral_diff_correction_ = 0;
+                lateral_diff_smooth_valid_ = false;
+            }
+
+            const bool post_change_hold_active =
+                c_.direction_change_post_hold_ms > 0 &&
+                direction_change_post_hold_start_ !=
+                    std::chrono::steady_clock::time_point{} &&
+                now - direction_change_post_hold_start_ <
+                    std::chrono::milliseconds(c_.direction_change_post_hold_ms);
+            if (post_change_hold_active) {
+                const int max_correction_from_diff =
+                    c_.direction_change_post_max_diff_rpm / 2;
+                applied_correction = std::clamp(
+                    applied_correction, -max_correction_from_diff,
+                    max_correction_from_diff);
+                smoothed_applied_correction_ = applied_correction;
+                heading_correction = applied_correction * direction_correction_sign;
+                if (c_.show_log && !direction_change_post_hold_logged_) {
+                    std::cout << "DIRECTION_CHANGE_POST_HOLD active_ms="
+                              << c_.direction_change_post_hold_ms
+                              << " max_diff_rpm="
+                              << c_.direction_change_post_max_diff_rpm
+                              << std::endl;
+                    direction_change_post_hold_logged_ = true;
+                }
+            } else {
+                direction_change_post_hold_logged_ = false;
+            }
+            left_rpm = throttle * c_.run_rpm - applied_correction;
+            right_rpm = throttle * c_.run_rpm + applied_correction;
+            // Do not ask either side to exceed Run_RPM.  The driver/motor may
+            // not be able to track the over-speed side (for example 35/65 when
+            // Run_RPM is 50), which makes the correction ineffective and can
+            // worsen reverse drift.  Scale both sides down while preserving the
+            // requested left/right ratio so the differential correction stays
+            // achievable.
+            const int peak_rpm = std::max(std::abs(left_rpm), std::abs(right_rpm));
+            if (peak_rpm > c_.run_rpm) {
+                const double scale = static_cast<double>(c_.run_rpm) /
+                                     static_cast<double>(peak_rpm);
+                left_rpm = static_cast<int>(std::lround(left_rpm * scale));
+                right_rpm = static_cast<int>(std::lround(right_rpm * scale));
+            }
+
+            // REVERSE_TARGET_TRIM_ACTIVE
+            // Physical reverse uses positive logical throttle on this chassis.
+            if (throttle > 0 && steering == 0) {
+                left_rpm += static_cast<int>(std::lround(c_.reverse_left_target_trim_rpm));
+                right_rpm += static_cast<int>(std::lround(c_.reverse_right_target_trim_rpm));
+            }
+            heading_holding = true;
+        } else if (steering != 0) {
+            heading_hold_active_ = false;
+            maybeResetHeadingForSteering();
+            heading_throttle_ = 0;
+        } else if (throttle == 0) {
+            heading_hold_active_ = false;
+            steering_reset_candidate_active_ = false;
+            heading_throttle_ = 0;
+            smoothed_applied_correction_ = 0;
+            heading_correction_smooth_valid_ = false;
+        }
+
+        if (rotate_command && c_.rotate_factory_current_control_enable) {
+            // Startup speed guard is one-shot. Re-entering it after the wheels
+            // accelerate commands zero speed and causes a stop-brake reverse kick.
+            if (c_.rotate_speed_guard_enable && !rotate_speed_loop_active_) {
+                const double max_rpm = std::max({std::abs(measured_rpm_[0]), std::abs(measured_rpm_[1]), std::abs(measured_rpm_[2]), std::abs(measured_rpm_[3])});
+                const bool below_threshold = max_rpm <= c_.rotate_start_max_rpm;
+                const auto guard_deadline = rotate_neutral_hold_start_ +
+                    std::chrono::milliseconds(c_.rotate_neutral_hold_ms +
+                                              c_.rotate_start_guard_timeout_ms);
+                if (!below_threshold && now < guard_deadline) {
+                    if (c_.show_log && !rotate_speed_guard_logged_) {
+                        std::cout << "ROTATE_SPEED_GUARD wait max_rpm=" << max_rpm
+                                  << " allow_below=" << c_.rotate_start_max_rpm
+                                  << " timeout_ms=" << c_.rotate_start_guard_timeout_ms
+                                  << std::endl;
+                        rotate_speed_guard_logged_ = true;
+                    }
+                    applyWheelSpeedControl({0.0, 0.0, 0.0, 0.0});
+                    can_.current(c_.mower_id, mower_on ? c_.cut_current : 0);
+                    logState(throttle, steering, mower_on, false, 0, 0,
+                             false, imu_ ? imu_->yawDeg() : 0.0, 0.0, 0);
+                    return;
+                }
+                if (!below_threshold && c_.show_log && !rotate_speed_guard_timeout_logged_) {
+                    std::cout << "ROTATE_SPEED_GUARD timeout allow max_rpm=" << max_rpm
+                              << " allow_below=" << c_.rotate_start_max_rpm << std::endl;
+                    rotate_speed_guard_timeout_logged_ = true;
+                }
+            }
+            if (!rotate_speed_loop_active_) {
+                rotate_speed_loop_active_ = true;
+                wheel_integral_.fill(0.0);
+                wheel_started_.fill(false);
+                wheel_start_elapsed_ms_.fill(0);
+                wheel_start_confirm_count_.fill(0);
+                wheel_stall_count_.fill(0);
+                if (c_.show_log) {
+                    std::cout << "ROTATE_SPEED_LOOP current_limit_10mA=" << c_.rotate_max_current
+                              << " amp=" << c_.rotate_max_current * 0.01 << std::endl;
+                }
+            }
+            // In driver speed mode, apply the dedicated rotate current limit
+            // before sending the in-place rotation target. Current mode
+            // keeps using the temporary software current limits below.
+            setDriveMaxCurrent(c_.rotate_max_current, "rotate_speed_loop");
+            const int saved_wheel_max_current = c_.wheel_max_current;
+            const int saved_feedforward_current = c_.wheel_feedforward_current;
+            const int saved_integral_max_current = c_.wheel_integral_max_current;
+            const int saved_start_initial_current = c_.wheel_start_initial_current;
+            const int saved_start_step_current = c_.wheel_start_step_current;
+            const int saved_start_max_current = c_.wheel_start_max_current;
+            c_.wheel_max_current = c_.rotate_max_current;
+            c_.wheel_feedforward_current = std::min(c_.rotate_max_current, std::max(c_.wheel_feedforward_current, c_.rotate_max_current / 3));
+            c_.wheel_integral_max_current = std::min(c_.rotate_max_current, std::max(c_.wheel_integral_max_current, c_.rotate_max_current / 5));
+            // In-place rotate needs higher breakaway torque than normal drive.
+            c_.wheel_start_initial_current = std::min(c_.rotate_max_current, std::max(c_.wheel_start_initial_current, c_.rotate_max_current * 2 / 3));
+            c_.wheel_start_step_current = std::max(c_.wheel_start_step_current, c_.rotate_max_current / 20);
+            c_.wheel_start_max_current = c_.rotate_max_current;
+            applyWheelSpeedControl({static_cast<double>(left_rpm), static_cast<double>(left_rpm),
+                                    static_cast<double>(right_rpm), static_cast<double>(right_rpm)});
+            c_.wheel_max_current = saved_wheel_max_current;
+            c_.wheel_feedforward_current = saved_feedforward_current;
+            c_.wheel_integral_max_current = saved_integral_max_current;
+            c_.wheel_start_initial_current = saved_start_initial_current;
+            c_.wheel_start_step_current = saved_start_step_current;
+            c_.wheel_start_max_current = saved_start_max_current;
+            can_.current(c_.mower_id, mower_on ? c_.cut_current : 0);
+            logState(throttle, steering, mower_on, false, left_rpm, right_rpm,
+                     false, imu_ ? imu_->yawDeg() : 0.0, 0.0, 0);
+            return;
+        }
+
+        rotate_speed_loop_active_ = false;
+        const bool final_arc_command = throttle != 0 && steering != 0 && !rotate_command;
+        arc_drive_active_ = final_arc_command;
+        const int saved_wheel_max_current = c_.wheel_max_current;
+        const int saved_start_max_current = c_.wheel_start_max_current;
+        const int arc_run_current =
+            (final_arc_command && c_.arc_turn_max_current > 0) ?
+            std::max(c_.wheel_max_current, c_.arc_turn_max_current) : c_.wheel_max_current;
+        const int arc_start_current =
+            (final_arc_command && c_.arc_turn_start_max_current > 0) ?
+            std::max(c_.wheel_start_max_current, c_.arc_turn_start_max_current) :
+            c_.wheel_start_max_current;
+        c_.wheel_max_current = arc_run_current;
+        c_.wheel_start_max_current = arc_start_current;
+        setDriveMaxCurrent(rotate_command ? c_.rotate_max_current : c_.wheel_max_current,
+                           rotate_command ? "rotate_speed_loop" :
+                           (final_arc_command ? "arc_turn" : "normal_run"));
+        applyWheelSpeedControl({static_cast<double>(left_rpm), static_cast<double>(left_rpm),
+                                static_cast<double>(right_rpm), static_cast<double>(right_rpm)});
+        arc_drive_active_ = false;
+        c_.wheel_max_current = saved_wheel_max_current;
+        c_.wheel_start_max_current = saved_start_max_current;
+        can_.current(c_.mower_id, mower_on ? c_.cut_current : 0);
+        logState(throttle, steering, mower_on, false, left_rpm, right_rpm,
+                 heading_holding, imu_ ? imu_->yawDeg() : 0.0,
+                 heading_error, heading_correction);
+        logHeadingTarget(throttle, steering, heading_holding, left_rpm, right_rpm,
+                         heading_error, heading_correction);
+        logStraightness(throttle, steering, heading_holding, heading_error, heading_correction);
+    }
+
+    // ROS 2 速度模式（新增）：把 /cmd_vel 的线速度/角速度换算成左右轮目标转速，
+    // 复用现有四轮速度环(PID)、加减速斜坡、启动电流与限幅逻辑。
+    // 物理前进 = 逻辑负转速；差速模型：
+    //   v_left = v - w * track/2, v_right = v + w * track/2
+    // 纯旋转时沿用原地旋转的电流上限，保证小空间转向扭矩。
+    void applyRosVelocity(double linear_mps, double angular_radps, bool failsafe) {
+        if (failsafe) {
+            stopAll(false);
+            logState(0, 0, false, true, 0, 0, false, 0.0, 0.0, 0);
+            return;
+        }
+        const double max_v = c_.ros_max_linear_mps > 0.0 ? c_.ros_max_linear_mps : 0.5;
+        const double max_w = c_.ros_max_angular_radps > 0.0 ? c_.ros_max_angular_radps : 1.0;
+        const double v = std::clamp(linear_mps, -max_v, max_v);
+        const double w = std::clamp(angular_radps, -max_w, max_w);
+        const double rpm_per_mps =
+            60.0 / (2.0 * 3.14159265358979323846 * c_.wheel_radius_m);
+        const double half_track = 0.5 * c_.track_width_m;
+        const double left_phys = v - w * half_track;
+        const double right_phys = v + w * half_track;
+        const bool rotate = std::abs(v) < 1e-3 && std::abs(w) > 1e-3;
+        const double limit = static_cast<double>(std::max(
+            1, rotate ? c_.rotate_rpm : c_.run_rpm));
+        // 物理前进对应负逻辑转速，与现有 apply() 的符号约定一致。
+        double left_target = std::clamp(-left_phys * rpm_per_mps, -limit, limit);
+        double right_target = std::clamp(-right_phys * rpm_per_mps, -limit, limit);
+
+        const int saved_max_current = c_.wheel_max_current;
+        const int saved_feedforward = c_.wheel_feedforward_current;
+        const int saved_integral_max = c_.wheel_integral_max_current;
+        if (rotate) {
+            setDriveMaxCurrent(c_.rotate_max_current, "ros_rotate");
+            c_.wheel_max_current = c_.rotate_max_current;
+            c_.wheel_feedforward_current =
+                std::max(c_.wheel_feedforward_current, c_.rotate_max_current / 3);
+            c_.wheel_integral_max_current =
+                std::min(c_.rotate_max_current,
+                         std::max(c_.wheel_integral_max_current, c_.rotate_max_current / 5));
+        } else {
+            setDriveMaxCurrent(c_.wheel_max_current, "ros_speed_loop");
+        }
+        // 四轮目标：左前/左后同速，右前/右后同速；PID 在 applyWheelSpeedControl 内闭环。
+        applyWheelSpeedControl({left_target, left_target, right_target, right_target});
+        c_.wheel_max_current = saved_max_current;
+        c_.wheel_feedforward_current = saved_feedforward;
+        c_.wheel_integral_max_current = saved_integral_max;
+        can_.current(c_.mower_id, 0);
+
+        const int left_rpm = static_cast<int>(std::lround(left_target));
+        const int right_rpm = static_cast<int>(std::lround(right_target));
+        const int throttle_log = v > 1e-3 ? -1 : (v < -1e-3 ? 1 : 0);
+        const int steering_log = w > 1e-3 ? 1 : (w < -1e-3 ? -1 : 0);
+        logState(throttle_log, steering_log, false, false, left_rpm, right_rpm,
+                 false, imu_ ? imu_->yawDeg() : 0.0, 0.0, 0);
+        if (c_.show_log) {
+            const auto now = std::chrono::steady_clock::now();
+            if (last_ros_log_ == std::chrono::steady_clock::time_point{} ||
+                now - last_ros_log_ >= std::chrono::milliseconds(250)) {
+                last_ros_log_ = now;
+                std::cout << "ROS_VELOCITY v_mps=" << v << " w_radps=" << w
+                          << " target_left=" << left_rpm
+                          << " target_right=" << right_rpm
+                          << " limit=" << limit << std::endl;
+            }
+        }
+    }
+
+private:
+
+    struct ArcThrottleTarget {
+        double left{0.0};
+        double right{0.0};
+        int rpm_limit{0};
+    };
+
+    // Moving-turn arc mixer:
+    // throttle magnitude controls overall speed; steering magnitude controls
+    // the left/right wheel ratio. In-place rotation does not enter this path.
+    ArcThrottleTarget computeArcThrottleTargets(
+        int throttle,
+        int steering,
+        double throttle_magnitude,
+        double steering_magnitude,
+        const std::chrono::steady_clock::time_point& now) {
+        ArcThrottleTarget out;
+        out.rpm_limit = c_.run_rpm;
+
+        if (steering == 0) {
+            arc_turn_blend_active_ = false;
+            arc_turn_blend_key_ = 0;
+            arc_turn_blend_logged_ = false;
+            out.left = static_cast<double>(throttle);
+            out.right = static_cast<double>(throttle);
+            return out;
+        }
+
+        // Arc module owns only throttle+steering. Straight-line heading hold is
+        // disabled here, so this module cannot disturb the straight branch.
+        maybeResetHeadingForSteering();
+
+        double arc_blend = 1.0;
+        if (c_.arc_turn_blend_ms > 0) {
+            const int arc_key = (throttle > 0 ? 1 : -1) * (steering > 0 ? 1 : -1);
+            if (!arc_turn_blend_active_ || arc_key != arc_turn_blend_key_) {
+                arc_turn_blend_active_ = true;
+                arc_turn_blend_key_ = arc_key;
+                arc_turn_blend_start_ = now;
+                arc_turn_blend_logged_ = false;
+            }
+            const double elapsed_ms =
+                std::chrono::duration<double, std::milli>(now - arc_turn_blend_start_).count();
+            const double blend_raw = std::clamp(
+                elapsed_ms / static_cast<double>(c_.arc_turn_blend_ms), 0.0, 1.0);
+            // Smoothstep: continuous acceleration into the turn.
+            arc_blend = blend_raw * blend_raw * (3.0 - 2.0 * blend_raw);
+            if (c_.show_log && !arc_turn_blend_logged_) {
+                std::cout << "ARC_TURN_BLEND start_ms=" << c_.arc_turn_blend_ms
+                          << " from=straight_to_arc" << std::endl;
+                arc_turn_blend_logged_ = true;
+            }
+        }
+
+        // Apply the configured arc-turn outer-wheel ceiling. A value of 0 keeps
+        // the original behavior and uses the current gear's straight Run_RPM.
+        // This limit applies only while steering; straight-line speed is not
+        // changed.
+        out.rpm_limit = c_.turn_max_rpm > 0
+            ? std::min(c_.run_rpm, c_.turn_max_rpm)
+            : c_.run_rpm;
+
+        const double full_steer_inner_ratio =
+            std::clamp(c_.turn_inner_ratio, -0.50, 0.95);
+        const double throttle_scale = std::clamp(throttle_magnitude, 0.0, 1.0);
+        const double steering_scale =
+            std::clamp(steering_magnitude, 0.0, 1.0) * arc_blend;
+
+        // Throttle-priority moving-turn mixer:
+        //   * throttle magnitude alone sets outer-wheel speed;
+        //   * steering magnitude only interpolates the inner/outer ratio;
+        //   * no peak normalization is allowed to promote a small throttle input
+        //     back to full gear speed.
+        double inner_ratio =
+            1.0 - steering_scale * (1.0 - full_steer_inner_ratio);
+        double expected_yaw_rate_dps = 0.0;
+        double actual_yaw_rate_dps = 0.0;
+        double yaw_rate_boost_rpm = 0.0;
+        const double outer_rpm = static_cast<double>(out.rpm_limit) * throttle_scale;
+        if (imu_ && imu_->valid() && c_.track_width_m > 0.0 &&
+            c_.wheel_radius_m > 0.0 && c_.arc_turn_yawrate_kp > 0.0 &&
+            outer_rpm > 1.0) {
+            const double inner_rpm = outer_rpm * inner_ratio;
+            expected_yaw_rate_dps =
+                (outer_rpm - inner_rpm) * (6.0 * c_.wheel_radius_m / c_.track_width_m);
+            actual_yaw_rate_dps = std::abs(imu_->rateDps());
+            const double yaw_rate_error_dps =
+                std::max(0.0, expected_yaw_rate_dps - actual_yaw_rate_dps);
+            yaw_rate_boost_rpm = std::clamp(
+                yaw_rate_error_dps * c_.arc_turn_yawrate_kp,
+                0.0,
+                static_cast<double>(c_.arc_turn_yawrate_max_boost_rpm));
+            if (yaw_rate_boost_rpm > 0.0) {
+                const double boosted_inner_rpm =
+                    std::max(static_cast<double>(c_.arc_turn_min_inner_rpm),
+                             inner_rpm - yaw_rate_boost_rpm);
+                inner_ratio = std::clamp(
+                    boosted_inner_rpm / std::max(1.0, outer_rpm), -0.50, 0.95);
+            }
+        }
+
+        const double outer_command = static_cast<double>(throttle) * throttle_scale;
+        const double inner_command = outer_command * inner_ratio;
+        const bool left_is_outer = throttle * steering < 0;
+        out.left = left_is_outer ? outer_command : inner_command;
+        out.right = left_is_outer ? inner_command : outer_command;
+
+        if (c_.show_log &&
+            now - arc_turn_last_log_ >= std::chrono::milliseconds(250)) {
+            arc_turn_last_log_ = now;
+            const double left_target_abs = std::abs(out.left * out.rpm_limit);
+            const double right_target_abs = std::abs(out.right * out.rpm_limit);
+            const double actual_left_abs =
+                0.5 * (std::abs(measured_rpm_[0]) + std::abs(measured_rpm_[1]));
+            const double actual_right_abs =
+                0.5 * (std::abs(measured_rpm_[2]) + std::abs(measured_rpm_[3]));
+            const char* quad = "ARC";
+            if (throttle < 0 && steering > 0) quad = "FORWARD_LEFT";
+            else if (throttle < 0 && steering < 0) quad = "FORWARD_RIGHT";
+            else if (throttle > 0 && steering > 0) quad = "REVERSE_LEFT";
+            else if (throttle > 0 && steering < 0) quad = "REVERSE_RIGHT";
+            std::cout << "ARC_TURN_MODULE quad=" << quad
+                      << " gear=" << current_gear_name_
+                      << " rpm_limit=" << out.rpm_limit
+                      << " blend=" << arc_blend
+                      << " inner_ratio=" << inner_ratio
+                      << " yaw_boost_rpm=" << yaw_rate_boost_rpm
+                      << " expected_yaw_dps=" << expected_yaw_rate_dps
+                      << " actual_yaw_dps=" << actual_yaw_rate_dps
+                      << " left_target_abs=" << left_target_abs
+                      << " right_target_abs=" << right_target_abs
+                      << " actual_left_abs=" << actual_left_abs
+                      << " actual_right_abs=" << actual_right_abs
+                      << std::endl;
+        }
+        return out;
+    }
+
+    void maybeResetHeadingForSteering() {
+        const auto now = std::chrono::steady_clock::now();
+        if (c_.heading_reset_steering_hold_ms == 0) {
+            resetHeadingTarget("steering");
+            return;
+        }
+        if (!steering_reset_candidate_active_) {
+            steering_reset_candidate_active_ = true;
+            steering_reset_start_ = now;
+            steering_reset_done_for_hold_ = false;
+            return;
+        }
+        if (!steering_reset_done_for_hold_ &&
+            now - steering_reset_start_ >= std::chrono::milliseconds(c_.heading_reset_steering_hold_ms)) {
+            resetHeadingTarget("steering_hold");
+            steering_reset_done_for_hold_ = true;
+        }
+    }
+
+    void logHeadingTarget(int throttle, int steering, bool heading_holding,
+                          int left_rpm, int right_rpm,
+                          double heading_error, int heading_correction) {
+        if (!c_.show_log || !heading_holding || throttle == 0 || steering != 0) return;
+        const auto now = std::chrono::steady_clock::now();
+        if (last_heading_target_log_ != std::chrono::steady_clock::time_point{} &&
+            now - last_heading_target_log_ < std::chrono::milliseconds(250)) return;
+        last_heading_target_log_ = now;
+        std::cout << "HEADING_TARGET_FINAL throttle=" << throttle
+                  << " steering=" << steering
+                  << " FL=" << left_rpm
+                  << " RL=" << left_rpm
+                  << " FR=" << right_rpm
+                  << " RR=" << right_rpm
+                  << " error_deg=" << heading_error
+                  << " correction_rpm=" << heading_correction
+                  << std::endl;
+    }
+
+    void logStraightness(int throttle, int steering, bool heading_holding,
+                         double heading_error, int heading_correction) {
+        const auto now = std::chrono::steady_clock::now();
+        if (throttle == 0 || steering != 0 || !heading_holding || !imu_ || !imu_->valid()) {
+            straight_check_active_ = false;
+            straight_max_abs_error_deg_ = 0.0;
+            return;
+        }
+        if (!straight_check_active_) {
+            straight_check_active_ = true;
+            straight_check_start_ = now;
+            straight_check_last_log_ = now;
+            straight_start_yaw_deg_ = imu_->yawDeg();
+            straight_max_abs_error_deg_ = 0.0;
+        }
+        straight_max_abs_error_deg_ = std::max(straight_max_abs_error_deg_,
+                                               std::abs(heading_error));
+        if (now - straight_check_last_log_ < std::chrono::milliseconds(1000)) return;
+
+        const double current_yaw = imu_->yawDeg();
+        double yaw_delta = current_yaw - straight_start_yaw_deg_;
+        while (yaw_delta > 180.0) yaw_delta -= 360.0;
+        while (yaw_delta < -180.0) yaw_delta += 360.0;
+        const double elapsed_s = std::chrono::duration<double>(now - straight_check_start_).count();
+        const double abs_delta = std::abs(yaw_delta);
+        const char* verdict = abs_delta <= 2.0 ? "OK" : (abs_delta <= 5.0 ? "WARN" : "BAD");
+        const char* drift = yaw_delta > 0.5 ? "LEFT" : (yaw_delta < -0.5 ? "RIGHT" : "NONE");
+        std::cout << "STRAIGHT_CHECK verdict=" << verdict
+                  << " drift=" << drift
+                  << " elapsed_s=" << elapsed_s
+                  << " yaw_start=" << straight_start_yaw_deg_
+                  << " yaw_now=" << current_yaw
+                  << " yaw_delta_deg=" << yaw_delta
+                  << " heading_error_deg=" << heading_error
+                  << " max_abs_error_deg=" << straight_max_abs_error_deg_
+                  << " correction=" << heading_correction
+                  << std::endl;
+        straight_check_last_log_ = now;
+    }
+
+    // Four-wheel speed loop: compare each target RPM with feedback RPM,
+    // then command driver speed mode under the configured current ceiling.
+    void applyWheelSpeedControl(const std::array<double, 4>& desired_rpm) {
+        const double dt = static_cast<double>(c_.control_ms) / 1000.0;
+        const bool stopped = std::all_of(desired_rpm.begin(), desired_rpm.end(),
+                                         [](double value) { return std::abs(value) < 0.5; });
+        const bool reverse_drive_command = std::any_of(desired_rpm.begin(), desired_rpm.end(),
+            [](double value) { return value > 0.5; });
+        // REVERSE_WHEEL_CURRENT_LIMIT_ACTIVE
+        // Limit reverse running current separately to reduce wheel slip/skid.
+        const int active_wheel_max_current =
+            (reverse_drive_command && c_.reverse_wheel_max_current > 0) ?
+            std::min(c_.wheel_max_current, c_.reverse_wheel_max_current) :
+            c_.wheel_max_current;
+        const int active_drive_light_brake_current =
+            (reverse_drive_command && c_.reverse_drive_light_brake_current > 0) ?
+            c_.reverse_drive_light_brake_current : c_.drive_light_brake_current;
+        const double active_drive_light_brake_overspeed_rpm =
+            (reverse_drive_command && c_.reverse_drive_light_brake_overspeed_rpm > 0.0) ?
+            c_.reverse_drive_light_brake_overspeed_rpm : c_.drive_light_brake_overspeed_rpm;
+        if (stopped) {
+            wheel_safety_latched_ = false;
+            wheel_safety_reason_.clear();
+            wheel_started_.fill(false);
+            wheel_start_elapsed_ms_.fill(0);
+            wheel_start_confirm_count_.fill(0);
+            wheel_stall_count_.fill(0);
+        }
+        // Startup grace: do not latch on a transient missing reply before
+        // all four motors have reported at least once.
+        const bool all_feedback_ever_seen = std::all_of(
+            feedback_ever_seen_.begin(), feedback_ever_seen_.end(),
+            [](bool seen) { return seen; });
+        if (!stopped && all_feedback_ever_seen &&
+            std::any_of(feedback_valid_.begin(), feedback_valid_.end(),
+                        [](bool valid) { return !valid; })) {
+            wheel_safety_latched_ = true;
+            wheel_safety_reason_ = "speed feedback lost";
+        }
+        for (std::size_t i = 0; i < 4; ++i) {
+            if (feedback_valid_[i] && std::abs(measured_rpm_[i]) > c_.wheel_overspeed_rpm) {
+                wheel_safety_latched_ = true;
+                wheel_safety_reason_ = "wheel overspeed";
+            }
+        }
+        if (wheel_safety_latched_) {
+            ramped_target_rpm_.fill(0.0);
+            wheel_integral_.fill(0.0);
+            wheel_current_10ma_.fill(0);
+            for (auto id : c_.motor_ids) {
+                if (c_.wheel_control_mode == "speed") can_.speed(id, 0);
+                else can_.current(id, 0);
+            }
+            if (!wheel_safety_reported_) {
+                std::cout << "WHEEL SAFETY STOP: "
+                          << (wheel_safety_reason_.empty() ? "startup timeout"
+                                                         : wheel_safety_reason_)
+                          << "; return throttle to neutral" << std::endl;
+                wheel_safety_reported_ = true;
+            }
+            return;
+        }
+        wheel_safety_reported_ = false;
+
+        // STOP_SHORT_BRAKE_ACTIVE
+        // When remote command goes neutral, do not hold zero RPM with reverse current forever.
+        // Allow only a short brake window, then coast with zero current to avoid forward/back shake.
+        static std::chrono::steady_clock::time_point stop_zero_start{};
+        static bool stop_zero_active = false;
+        static bool stop_20rpm_reported = false;
+        static bool stop_5rpm_reported = false;
+        static bool stop_complete_reported = false;
+        static bool stop_distance_start_valid = false;
+        static double stop_start_x_m = 0.0;
+        static double stop_start_y_m = 0.0;
+        static double stop_start_yaw_deg = 0.0;
+        static double stop_start_max_abs_rpm = 0.0;
+        static std::array<int, 4> stop_brake_latch_sign{};
+        const auto stop_now = std::chrono::steady_clock::now();
+        // Do not release active braking at an arbitrary 5 RPM threshold.
+        // Continue braking until the configured near-zero release threshold;
+        // this makes low-speed stops decisive instead of allowing a long coast.
+        const double stop_coast_rpm = std::max(1.0, c_.brake_release_rpm);
+        const double stop_release_rpm = stop_coast_rpm;
+        // Adaptive per-wheel stop braking: brake faster wheels harder, taper near zero.
+        static std::array<double, 4> previous_stop_abs_rpm{};
+        static std::array<bool, 4> previous_stop_rpm_valid{};
+        if (!stopped) previous_stop_rpm_valid.fill(false);
+        // stop_start_max_abs_rpm has static storage duration and must not be
+        // captured by the lambda. Static locals are directly accessible here.
+        const auto adaptive_stop_brake_current = [this, dt](double abs_rpm, std::size_t wheel_index) {
+            if (!c_.brake_enable || abs_rpm <= c_.brake_release_rpm) return 0;
+            // Continuous speed-independent braking envelope.  The requested
+            // deceleration is handled by feedback; this is only a smooth
+            // safety ceiling, not a per-gear lookup table.
+            const double speed_over_low = std::max(0.0, stop_start_max_abs_rpm - 70.0);
+            const double brake_limit = std::min(180.0,
+                std::min(static_cast<double>(c_.wheel_max_current),
+                         static_cast<double>(c_.brake_current) + 1.75 * speed_over_low));
+            // Base segmented profile: strong at speed, stable through the
+            // mid-band, then unload before zero to prevent kickback.
+            const double release = c_.brake_release_rpm;
+            double current = 0.0;
+            if (abs_rpm >= 60.0) {
+                current = brake_limit;
+            } else if (abs_rpm >= 30.0) {
+                current = 45.0 + (abs_rpm - 30.0) * (25.0 / 30.0);
+            } else if (abs_rpm >= 10.0) {
+                current = 15.0 + (abs_rpm - 10.0) * (30.0 / 20.0);
+            } else {
+                current = 15.0 * std::clamp(
+                    (abs_rpm - release) / std::max(0.1, 10.0 - release), 0.0, 1.0);
+            }
+
+            // Closed-loop deceleration feedback.  Hold a common target
+            // deceleration across arbitrary speeds instead of tuning gears
+            // independently.  The low-speed taper below remains the safety
+            // mechanism that prevents zero-crossing kickback.
+            if (previous_stop_rpm_valid[wheel_index] && abs_rpm > 10.0) {
+                const double decel_rpm_s =
+                    (previous_stop_abs_rpm[wheel_index] - abs_rpm) / std::max(0.001, dt);
+                constexpr double target_decel_rpm_s = 120.0;
+                const double decel_error = target_decel_rpm_s - decel_rpm_s;
+                current += std::clamp(decel_error * 0.35, -15.0, 25.0);
+            }
+            previous_stop_abs_rpm[wheel_index] = abs_rpm;
+            previous_stop_rpm_valid[wheel_index] = true;
+            if (current < 1.0) return 0;
+            return static_cast<int>(std::lround(std::clamp(
+                current, 1.0, brake_limit)));
+        };
+        if (stopped) {
+            if (!stop_zero_active) {
+                stop_zero_active = true;
+                stop_zero_start = stop_now;
+                stop_20rpm_reported = false;
+                stop_5rpm_reported = false;
+                stop_complete_reported = false;
+                stop_distance_start_valid = odom_pose_valid_;
+                stop_start_x_m = odom_x_m_;
+                stop_start_y_m = odom_y_m_;
+                stop_start_yaw_deg = odom_yaw_deg_;
+                double start_max_abs_rpm = 0.0;
+                for (std::size_t i = 0; i < 4; ++i) {
+                    if (feedback_valid_[i]) start_max_abs_rpm = std::max(start_max_abs_rpm, std::abs(measured_rpm_[i]));
+                    stop_brake_latch_sign[i] =
+                        (feedback_valid_[i] && std::abs(measured_rpm_[i]) > stop_release_rpm) ?
+                        (measured_rpm_[i] > 0.0 ? 1 : -1) : 0;
+                }
+                stop_start_max_abs_rpm = start_max_abs_rpm;
+                std::cout << "STOP_BRAKE_START max_rpm=" << start_max_abs_rpm
+                          << " window_ms=" << c_.stop_brake_window_ms
+                          << " brake_limit=" << (start_max_abs_rpm >= 135.0 ? 90 :
+                              (start_max_abs_rpm >= 90.0 ? 130 : c_.brake_current))
+                          << " odom_valid=" << (stop_distance_start_valid ? 1 : 0)
+                          << " x=" << stop_start_x_m
+                          << " y=" << stop_start_y_m
+                          << " yaw_deg=" << stop_start_yaw_deg << std::endl;
+            }
+            double stop_max_abs_rpm = 0.0;
+            for (std::size_t i = 0; i < 4; ++i) {
+                if (feedback_valid_[i]) stop_max_abs_rpm = std::max(stop_max_abs_rpm, std::abs(measured_rpm_[i]));
+            }
+            const auto stop_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(stop_now - stop_zero_start).count();
+            if (!stop_20rpm_reported && stop_max_abs_rpm <= 20.0) {
+                stop_20rpm_reported = true;
+                std::cout << "STOP_BRAKE_20RPM elapsed_ms=" << stop_elapsed_ms
+                          << " max_rpm=" << stop_max_abs_rpm << std::endl;
+            }
+            if (!stop_5rpm_reported && stop_max_abs_rpm <= 5.0) {
+                stop_5rpm_reported = true;
+                std::cout << "STOP_BRAKE_5RPM elapsed_ms=" << stop_elapsed_ms
+                          << " max_rpm=" << stop_max_abs_rpm << std::endl;
+            }
+            if (!stop_complete_reported && stop_max_abs_rpm <= c_.brake_release_rpm) {
+                stop_complete_reported = true;
+                std::cout << "STOP_COMPLETE elapsed_ms=" << stop_elapsed_ms
+                          << " max_rpm=" << stop_max_abs_rpm << std::endl;
+                if (stop_distance_start_valid && stop_start_max_abs_rpm > 5.0) {
+                    const double dx = odom_x_m_ - stop_start_x_m;
+                    const double dy = odom_y_m_ - stop_start_y_m;
+                    const double yaw_rad = stop_start_yaw_deg * 3.14159265358979323846 / 180.0;
+                    const double forward_m = dx * std::cos(yaw_rad) + dy * std::sin(yaw_rad);
+                    const double lateral_m = -dx * std::sin(yaw_rad) + dy * std::cos(yaw_rad);
+                    const double euclidean_m = std::hypot(dx, dy);
+                    std::cout << "STOP_DISTANCE elapsed_ms=" << stop_elapsed_ms
+                              << " forward_m=" << forward_m
+                              << " lateral_m=" << lateral_m
+                              << " euclidean_m=" << euclidean_m
+                              << " odom_end_x=" << odom_x_m_
+                              << " odom_end_y=" << odom_y_m_ << std::endl;
+                }
+            }
+        } else {
+            stop_zero_active = false;
+            stop_zero_start = {};
+            stop_20rpm_reported = false;
+            stop_5rpm_reported = false;
+            stop_complete_reported = false;
+            stop_distance_start_valid = false;
+            stop_start_max_abs_rpm = 0.0;
+            stop_brake_latch_sign.fill(0);
+        }
+        // Feedback-based stop: the brake remains active while the neutral
+        // command is held and a wheel is still moving.  The old fixed-time
+        // window allowed the vehicle to coast before reaching near-zero RPM.
+        const bool stop_short_brake_window = stop_zero_active;
+
+        if (c_.wheel_control_mode == "speed") {
+            for (std::size_t i = 0; i < 4; ++i) {
+                if (std::abs(desired_rpm[i]) < 0.5) {
+                    ramped_target_rpm_[i] = 0.0;
+                    wheel_integral_[i] = 0.0;
+                    wheel_current_10ma_[i] = 0;
+                    wheel_started_[i] = false;
+                    const int latched_stop_sign = stop_brake_latch_sign[i];
+                    const bool still_moving_same_stop_direction =
+                        latched_stop_sign != 0 &&
+                        feedback_valid_[i] &&
+                        measured_rpm_[i] * static_cast<double>(latched_stop_sign) > stop_release_rpm;
+                    if (c_.brake_enable && stop_short_brake_window &&
+                        still_moving_same_stop_direction) {
+                        // Short active brake in speed mode, then release. This prevents
+                        // ground coasting without holding speed=0 and causing zero-speed hum.
+                        const double abs_rpm = std::abs(measured_rpm_[i]);
+                        const int staged_brake_current = adaptive_stop_brake_current(abs_rpm, i);
+                        wheel_current_10ma_[i] =
+                            latched_stop_sign > 0 ? -staged_brake_current : staged_brake_current;
+                        can_.current(c_.motor_ids[i], wheel_current_10ma_[i] * c_.motor_dirs[i]);
+                    } else {
+                        stop_brake_latch_sign[i] = 0;
+                        // Release after the short brake window; do not hold speed=0.
+                        can_.current(c_.motor_ids[i], 0);
+                    }
+                    continue;
+                }
+                if (!feedback_valid_[i]) {
+                    ramped_target_rpm_[i] = 0.0;
+                    wheel_integral_[i] = 0.0;
+                    wheel_current_10ma_[i] = 0;
+                    can_.speed(c_.motor_ids[i], 0);
+                    continue;
+                }
+                const bool accelerating = std::abs(desired_rpm[i]) > std::abs(ramped_target_rpm_[i]);
+                const int active_accel_rpm_s = (desired_rpm[i] > 0.0 && c_.reverse_speed_accel_rpm_s > 0) ?
+                    c_.reverse_speed_accel_rpm_s : c_.speed_accel_rpm_s;
+                const double slew = (accelerating ? active_accel_rpm_s : c_.speed_decel_rpm_s) * dt;
+                ramped_target_rpm_[i] += std::clamp(desired_rpm[i] - ramped_target_rpm_[i], -slew, slew);
+                const double trim_direction = ramped_target_rpm_[i] >= 0.0 ? 1.0 : -1.0;
+                const double command_rpm = std::abs(ramped_target_rpm_[i]) >= 0.5
+                    ? ramped_target_rpm_[i] + trim_direction * c_.wheel_speed_trim_rpm[i]
+                    : 0.0;
+                const int32_t erpm = static_cast<int32_t>(std::lround(
+                    command_rpm * c_.pole_pairs * c_.gear_ratio * c_.motor_dirs[i]));
+                wheel_current_10ma_[i] = 0;
+                wheel_started_[i] = true;
+                can_.speed(c_.motor_ids[i], erpm);
+            }
+            return;
+        }
+        double avg_abs_target_rpm = 0.0;
+        int active_target_count = 0;
+        for (double rpm : ramped_target_rpm_) {
+            if (std::abs(rpm) >= 0.5) {
+                avg_abs_target_rpm += std::abs(rpm);
+                ++active_target_count;
+            }
+        }
+        if (active_target_count > 0) avg_abs_target_rpm /= active_target_count;
+
+        // Side-level differential feedback. Heading hold changes left/right targets,
+        // but on the ground the actual side speeds may not separate enough because
+        // one side saturates or the other side coasts. Close that measured gap here.
+        double side_diff_feedback_current = 0.0;
+        if (c_.wheel_diff_feedback_current_per_rpm > 0.0 &&
+            c_.wheel_diff_feedback_max_current > 0 &&
+            feedback_valid_[0] && feedback_valid_[1] && feedback_valid_[2] && feedback_valid_[3]) {
+            const double left_target_abs = 0.5 * (std::abs(ramped_target_rpm_[0]) + std::abs(ramped_target_rpm_[1]));
+            const double right_target_abs = 0.5 * (std::abs(ramped_target_rpm_[2]) + std::abs(ramped_target_rpm_[3]));
+            const double left_actual_abs = 0.5 * (std::abs(measured_rpm_[0]) + std::abs(measured_rpm_[1]));
+            const double right_actual_abs = 0.5 * (std::abs(measured_rpm_[2]) + std::abs(measured_rpm_[3]));
+            const double desired_diff_rpm = right_target_abs - left_target_abs;
+            const double actual_diff_rpm = right_actual_abs - left_actual_abs;
+            const double diff_error_rpm = desired_diff_rpm - actual_diff_rpm;
+            if (std::abs(left_target_abs) >= 0.5 || std::abs(right_target_abs) >= 0.5) {
+                side_diff_feedback_current = std::clamp(
+                    diff_error_rpm * c_.wheel_diff_feedback_current_per_rpm,
+                    -static_cast<double>(c_.wheel_diff_feedback_max_current),
+                    static_cast<double>(c_.wheel_diff_feedback_max_current));
+            }
+        }
+
+        bool startup_failed = false;
+        for (std::size_t i = 0; i < 4; ++i) {
+            if (std::abs(desired_rpm[i]) < 0.5) {
+                ramped_target_rpm_[i] = 0.0;
+                wheel_integral_[i] = 0.0;
+                wheel_started_[i] = false;
+                wheel_start_elapsed_ms_[i] = 0;
+                wheel_start_confirm_count_[i] = 0;
+                wheel_stall_count_[i] = 0;
+                const int latched_stop_sign = stop_brake_latch_sign[i];
+                const bool still_moving_same_stop_direction =
+                    latched_stop_sign != 0 &&
+                    feedback_valid_[i] &&
+                    measured_rpm_[i] * static_cast<double>(latched_stop_sign) > stop_release_rpm;
+                if (c_.brake_enable && stop_short_brake_window &&
+                    still_moving_same_stop_direction) {
+                    // STOP_STAGED_BRAKE_ACTIVE
+                    // Strong brake at high speed, taper near zero, then release.
+                    // The stop direction is latched on the first neutral cycle;
+                    // if the wheel crosses zero or reverses, braking is cut
+                    // instead of pushing the chassis backwards.
+                    const double abs_rpm = std::abs(measured_rpm_[i]);
+                    const int staged_brake_current = adaptive_stop_brake_current(abs_rpm, i);
+                    wheel_current_10ma_[i] =
+                        latched_stop_sign > 0 ? -staged_brake_current : staged_brake_current;
+                    can_.current(c_.motor_ids[i], wheel_current_10ma_[i] * c_.motor_dirs[i]);
+                } else {
+                    // After the short brake window, release the motor instead of
+                    // actively holding 0 RPM. This removes the stop shake.
+                    stop_brake_latch_sign[i] = 0;
+                    wheel_current_10ma_[i] = 0;
+                    can_.current(c_.motor_ids[i], 0);
+                }
+                continue;
+            }
+            if (!feedback_valid_[i]) {
+                ramped_target_rpm_[i] = 0.0; wheel_integral_[i] = 0.0;
+                wheel_current_10ma_[i] = 0; can_.current(c_.motor_ids[i], 0); continue;
+            }
+            const bool target_sign_reversal =
+                desired_rpm[i] * ramped_target_rpm_[i] < -0.5;
+            const bool accelerating =
+                std::abs(desired_rpm[i]) > std::abs(ramped_target_rpm_[i]);
+            const int active_accel_rpm_s =
+                (desired_rpm[i] > 0.0 && c_.reverse_speed_accel_rpm_s > 0) ?
+                c_.reverse_speed_accel_rpm_s : c_.speed_accel_rpm_s;
+            // ARC_EXIT_FAST_CROSS_ZERO_ACTIVE:
+            // When leaving an arc turn, the inner wheels may have a reverse
+            // ramped target. If the next command is straight with the same
+            // throttle, using the normal accel slew makes that inner side
+            // crawl through zero and the chassis pauses before going straight.
+            // Use the faster decel slew only for target sign reversal; steady
+            // straight-line target logic and stop braking remain unchanged.
+            const double slew =
+                (target_sign_reversal || !accelerating ?
+                 c_.speed_decel_rpm_s : active_accel_rpm_s) * dt;
+            ramped_target_rpm_[i] += std::clamp(desired_rpm[i] - ramped_target_rpm_[i], -slew, slew);
+            const double start_command_rpm = std::min(
+                10.0, std::max(2.0, std::abs(desired_rpm[i]) * 0.67));
+            const bool startup_kick_active =
+                wheel_start_elapsed_ms_[i] < c_.wheel_start_kick_ms;
+            const bool new_feedback = feedback_generation_[i] != processed_feedback_generation_[i];
+            if (new_feedback) {
+                processed_feedback_generation_[i] = feedback_generation_[i];
+                if (wheel_started_[i]) {
+                    if (std::abs(measured_rpm_[i]) < c_.wheel_stall_threshold_rpm)
+                        ++wheel_stall_count_[i];
+                    else
+                        wheel_stall_count_[i] = 0;
+                    if (wheel_stall_count_[i] >= c_.wheel_stall_confirm_samples) {
+                        wheel_started_[i] = false;
+                        wheel_start_elapsed_ms_[i] = 0;
+                        wheel_start_confirm_count_[i] = 0;
+                        wheel_stall_count_[i] = 0;
+                        wheel_integral_[i] = 0.0;
+                    }
+                } else if (wheel_start_elapsed_ms_[i] > 0) {
+                    const int exit_start_threshold_rpm =
+                        std::max(1, c_.wheel_start_threshold_rpm / 2);
+                    if (!startup_kick_active &&
+                        std::abs(measured_rpm_[i]) >= exit_start_threshold_rpm) {
+                        wheel_started_[i] = true;
+                        wheel_integral_[i] = 0.0;
+                        wheel_stall_count_[i] = 0;
+                        wheel_start_confirm_count_[i] = 0;
+                    } else if (std::abs(measured_rpm_[i]) >= c_.wheel_start_threshold_rpm) {
+                        ++wheel_start_confirm_count_[i];
+                    } else {
+                        wheel_start_confirm_count_[i] = 0;
+                    }
+                    if (wheel_start_confirm_count_[i] >= c_.wheel_start_confirm_samples) {
+                        wheel_started_[i] = true;
+                        wheel_integral_[i] = 0.0;
+                        wheel_stall_count_[i] = 0;
+                    }
+                }
+            }
+            if (!wheel_started_[i]) {
+                if (std::abs(desired_rpm[i]) < start_command_rpm) {
+                    processed_feedback_generation_[i] = feedback_generation_[i];
+                    wheel_start_elapsed_ms_[i] = 0;
+                    wheel_start_confirm_count_[i] = 0;
+                    wheel_current_10ma_[i] = 0;
+                    can_.current(c_.motor_ids[i], 0);
+                    continue;
+                }
+                wheel_start_elapsed_ms_[i] += c_.control_ms;
+                if (wheel_start_elapsed_ms_[i] > c_.wheel_start_timeout_ms) startup_failed = true;
+                const int steps = wheel_start_elapsed_ms_[i] / c_.wheel_start_step_ms;
+                const int ramp_current = std::min(c_.wheel_start_max_current,
+                    c_.wheel_start_initial_current + steps * c_.wheel_start_step_current);
+                const int start_current =
+                    startup_kick_active ? c_.wheel_start_max_current : ramp_current;
+                wheel_current_10ma_[i] = desired_rpm[i] > 0 ? start_current : -start_current;
+                double gain = (i < 2) ? c_.left_current_gain : c_.right_current_gain;
+                wheel_current_10ma_[i] = static_cast<int>(std::lround(std::clamp(
+                    static_cast<double>(wheel_current_10ma_[i]) * gain,
+                    -static_cast<double>(c_.wheel_start_max_current),
+                    static_cast<double>(c_.wheel_start_max_current))));
+                can_.current(c_.motor_ids[i], wheel_current_10ma_[i] * c_.motor_dirs[i]);
+                continue;
+            }
+            const double error = ramped_target_rpm_[i] - measured_rpm_[i];
+            double next_integral = wheel_integral_[i] + error * dt;
+            if (c_.wheel_speed_ki > 0.0) {
+                const double lim = static_cast<double>(c_.wheel_integral_max_current) / c_.wheel_speed_ki;
+                next_integral = std::clamp(next_integral, -lim, lim);
+            } else next_integral = 0.0;
+            const double desired_magnitude = std::max(1.0, std::abs(desired_rpm[i]));
+            const double feedforward_scale = std::clamp(
+                std::abs(ramped_target_rpm_[i]) / desired_magnitude, 0.0, 1.0);
+            double feedforward = c_.wheel_feedforward_current * feedforward_scale;
+            const double target_abs = std::abs(ramped_target_rpm_[i]);
+            const double measured_abs = std::abs(measured_rpm_[i]);
+            if (target_abs > 1.0 && (ramped_target_rpm_[i] * measured_rpm_[i]) > 0.0 &&
+                measured_abs > target_abs + 2.0) {
+                feedforward = 0.0;
+            }
+            const double ff = ramped_target_rpm_[i] >= 0 ? feedforward : -feedforward;
+            double diff_current = 0.0;
+            if (c_.wheel_diff_current_per_rpm > 0.0 && c_.wheel_diff_max_current > 0 &&
+                active_target_count > 0 && std::abs(ramped_target_rpm_[i]) >= 0.5) {
+                const double target_bias_rpm = std::abs(ramped_target_rpm_[i]) - avg_abs_target_rpm;
+                diff_current = target_bias_rpm * c_.wheel_diff_current_per_rpm;
+                diff_current = std::clamp(diff_current,
+                                          -static_cast<double>(c_.wheel_diff_max_current),
+                                          static_cast<double>(c_.wheel_diff_max_current));
+                diff_current = ramped_target_rpm_[i] >= 0 ? diff_current : -diff_current;
+            }
+            // Positive side_diff_feedback_current means: right side must be faster
+            // relative to left. Add current in each wheel's target direction on the
+            // right, and braking/opposite current on the left.
+            if (c_.wheel_diff_feedback_current_per_rpm > 0.0 &&
+                c_.wheel_diff_feedback_max_current > 0 &&
+                std::abs(ramped_target_rpm_[i]) >= 0.5) {
+                const double side_sign = (i < 2) ? -1.0 : 1.0;
+                const double direction_sign = ramped_target_rpm_[i] >= 0.0 ? 1.0 : -1.0;
+                diff_current += side_sign * side_diff_feedback_current * direction_sign;
+            }
+            const double raw = ff + c_.wheel_speed_kp * error + c_.wheel_speed_ki * next_integral + diff_current;
+            double limited = std::clamp(raw, -static_cast<double>(active_wheel_max_current), static_cast<double>(active_wheel_max_current));
+            // During a non-zero drive command, differential correction must not
+            // reverse-brake a wheel. That killed vehicle speed in reverse: the
+            // left side received negative current while its target RPM was still
+            // positive, so the whole car stalled. Let the correction remove drive
+            // torque down to zero only; active braking is reserved for stop.
+            if (std::abs(desired_rpm[i]) >= 0.5 && limited * desired_rpm[i] < 0.0) {
+                const bool same_direction = measured_rpm_[i] * desired_rpm[i] > 0.0;
+                const bool overspeeding = same_direction &&
+                    std::abs(measured_rpm_[i]) > std::abs(desired_rpm[i]) + active_drive_light_brake_overspeed_rpm;
+                if (active_drive_light_brake_current > 0 && overspeeding) {
+                    limited = desired_rpm[i] > 0.0 ?
+                        -static_cast<double>(active_drive_light_brake_current) :
+                        static_cast<double>(active_drive_light_brake_current);
+                } else {
+                    limited = 0.0;
+                }
+            }
+            if (std::abs(raw) <= active_wheel_max_current || raw * next_integral < 0.0) wheel_integral_[i] = next_integral;
+            double gain = (i < 2) ? c_.left_current_gain : c_.right_current_gain;
+            double gained = std::clamp(limited * gain,
+                -static_cast<double>(c_.wheel_max_current),
+                static_cast<double>(c_.wheel_max_current));
+            const double light_brake = static_cast<double>(std::max(0, active_drive_light_brake_current));
+            if (std::abs(desired_rpm[i]) >= 0.5 && light_brake > 0.0) {
+                const bool same_direction = measured_rpm_[i] * desired_rpm[i] > 0.0;
+                const bool overspeeding = same_direction &&
+                    std::abs(measured_rpm_[i]) > std::abs(desired_rpm[i]) + active_drive_light_brake_overspeed_rpm;
+                const double brake_cmd = desired_rpm[i] > 0.0 ? -light_brake : light_brake;
+                if (overspeeding) {
+                    // Force a small braking current based on the commanded target,
+                    // not the internal slew target. Heading correction can demand
+                    // left=50 while the slew target is still near 65; in that case
+                    // we still need a real, limited braking torque now.
+                    gained = brake_cmd;
+                } else if (gained * desired_rpm[i] < 0.0) {
+                    gained = std::clamp(gained, -light_brake, light_brake);
+                }
+            }
+            if (arc_drive_active_ && c_.arc_turn_inner_reverse_hold_current > 0 &&
+                std::abs(desired_rpm[i]) >= 0.5 &&
+                desired_rpm[i] * measured_rpm_[i] <= 0.0) {
+                // ARC_INNER_REVERSE_TORQUE_ACTIVE:
+                // Tight skid-steer arc needs the inner wheels to break static
+                // friction.  During arc only, force a bounded current in the
+                // inner target direction; straight-line logic is unaffected.
+                const double forced = desired_rpm[i] > 0.0 ?
+                    static_cast<double>(c_.arc_turn_inner_reverse_hold_current) :
+                    -static_cast<double>(c_.arc_turn_inner_reverse_hold_current);
+                if (std::abs(forced) > std::abs(gained) || gained * forced <= 0.0) {
+                    gained = forced;
+                }
+            }
+            wheel_current_10ma_[i] = static_cast<int>(std::lround(gained));
+            can_.current(c_.motor_ids[i], wheel_current_10ma_[i] * c_.motor_dirs[i]);
+        }
+        if (startup_failed) {
+            wheel_safety_latched_ = true;
+            wheel_safety_reason_ = "startup timeout";
+            wheel_current_10ma_.fill(0);
+            for (auto id : c_.motor_ids) {
+                if (c_.wheel_control_mode == "speed") can_.speed(id, 0);
+                else can_.current(id, 0);
+            }
+        }
+    }
+
+    void logState(int throttle, int steering, bool mower, bool failsafe,
+                  int left_rpm, int right_rpm, bool heading_holding,
+                  double yaw_deg, double heading_error, int correction) {
+        const int correction_bin = heading_holding ? correction / 5 : 999;
+        const std::array<int, 5> state{throttle, steering, mower ? 1 : 0,
+                                       failsafe ? 1 : 0, correction_bin};
+        if (!c_.show_log || state == last_state_) return;
+        last_state_ = state;
+        const char* motion = "STOP";
+        if (failsafe) motion = "FAILSAFE STOP";
+        // On this robot, negative logical throttle is physical forward.
+        else if (throttle < 0 && steering > 0) motion = "FORWARD LEFT";
+        else if (throttle < 0 && steering < 0) motion = "FORWARD RIGHT";
+        else if (throttle > 0 && steering > 0) motion = "REVERSE LEFT";
+        else if (throttle > 0 && steering < 0) motion = "REVERSE RIGHT";
+        else if (throttle < 0) motion = "FORWARD";
+        else if (throttle > 0) motion = "REVERSE";
+        else if (steering > 0) motion = "ROTATE LEFT";
+        else if (steering < 0) motion = "ROTATE RIGHT";
+        std::cout << motion << " left=" << left_rpm
+                  << " right=" << right_rpm
+                  << " mower=" << (mower ? "ON" : "OFF");
+        if (heading_holding) {
+            std::cout << " HEADING yaw=" << yaw_deg
+                      << " target=" << target_yaw_deg_
+                      << " error=" << heading_error
+                      << " correction=" << correction;
+        }
+        std::cout << std::endl;
+    }
+
+    Config c_;
+    CanBus& can_;
+    ImuYaw* imu_{nullptr};
+    int active_closed_loop_max_current_{-1};
+    bool heading_hold_active_{false};
+    bool heading_target_valid_{false};
+    int heading_throttle_{0};
+    double target_yaw_deg_{0.0};
+    double heading_integral_forward_{0.0};
+    double heading_integral_reverse_{0.0};
+    int smoothed_applied_correction_{0};
+    bool heading_correction_smooth_valid_{false};
+    int smoothed_lateral_diff_correction_{0};
+    bool lateral_diff_smooth_valid_{false};
+    std::array<double, 4> measured_rpm_{};
+    std::array<bool, 4> feedback_valid_{};
+    std::array<bool, 4> feedback_ever_seen_{};
+    std::array<double, 4> ramped_target_rpm_{};
+    std::array<double, 4> wheel_integral_{};
+    std::array<int, 4> wheel_current_10ma_{};
+    std::array<bool, 4> wheel_started_{};
+    std::array<int, 4> wheel_start_elapsed_ms_{};
+    std::array<int, 4> wheel_start_confirm_count_{};
+    std::array<int, 4> wheel_stall_count_{};
+    std::array<uint64_t, 4> feedback_generation_{};
+    std::array<uint64_t, 4> processed_feedback_generation_{};
+    bool wheel_safety_latched_{false};
+    bool wheel_safety_reported_{false};
+    std::string wheel_safety_reason_;
+    std::array<int, 5> last_state_{99, 99, 99, 99, 999};
+    std::chrono::steady_clock::time_point last_heading_target_log_{};
+    std::chrono::steady_clock::time_point last_ros_log_{};
+    bool straight_check_active_{false};
+    std::chrono::steady_clock::time_point heading_hold_start_{};
+    std::chrono::steady_clock::time_point straight_check_start_{};
+    std::chrono::steady_clock::time_point straight_check_last_log_{};
+    double straight_start_yaw_deg_{0.0};
+    double straight_max_abs_error_deg_{0.0};
+    double odom_x_m_{0.0};
+    double odom_y_m_{0.0};
+    double odom_yaw_deg_{0.0};
+    bool odom_pose_valid_{false};
+    bool odom_y_valid_{false};
+    double lateral_target_y_m_{0.0};
+    bool lateral_target_valid_{false};
+    bool steering_reset_candidate_active_{false};
+    bool steering_reset_done_for_hold_{false};
+    std::chrono::steady_clock::time_point steering_reset_start_{};
+    bool direction_change_hold_active_{false};
+    std::chrono::steady_clock::time_point direction_change_hold_start_{};
+    std::chrono::steady_clock::time_point direction_change_post_hold_start_{};
+    int direction_change_pending_throttle_{0};
+    bool direction_change_post_hold_logged_{false};
+    bool direction_change_settle_active_{false};
+    bool rotate_neutral_hold_active_{false};
+    bool rotate_neutral_hold_logged_{false};
+    bool rotate_speed_guard_logged_{false};
+    bool rotate_speed_loop_active_{false};
+    bool rotate_speed_guard_timeout_logged_{false};
+    std::chrono::steady_clock::time_point rotate_neutral_hold_start_{};
+    bool arc_turn_blend_active_{false};
+    bool arc_turn_blend_logged_{false};
+    int arc_turn_blend_key_{0};
+    std::chrono::steady_clock::time_point arc_turn_blend_start_{};
+    std::chrono::steady_clock::time_point arc_turn_last_log_{};
+    bool arc_drive_active_{false};
+    std::string current_gear_name_{"CONFIG"};
+    int last_motion_throttle_{0};
+};
+}
+
+// ----------------------------------------------------------------------------
+// 6. Main loop: read SBUS, refresh feedback, update odometry, control, log.
+// ----------------------------------------------------------------------------
+int main(int argc, char** argv) {
+    try {
+        const std::string first_arg = argc > 1 ? std::string(argv[1]) : std::string();
+        const bool dry_run = first_arg == "--dry-run";
+        const bool check_config_only = first_arg == "--check-config";
+        const std::string config_path = (check_config_only || dry_run) ?
+            (argc > 2 ? argv[2] : "config.xml") :
+            (argc > 1 ? argv[1] : "config.xml");
+        const Config config = loadConfig(config_path);
+        if (check_config_only) {
+            std::cout << "CONFIG_OK path=" << config_path
+                      << " SBUS=" << config.sbus_port
+                      << " CAN=" << config.can_port
+                      << " wheel_ids=" << config.motor_ids[0] << "/"
+                      << config.motor_ids[1] << "/"
+                      << config.motor_ids[2] << "/"
+                      << config.motor_ids[3]
+                      << " mower_id=" << config.mower_id
+                      << std::endl;
+            return 0;
+        }
+        // 仅测试用故障注入：保持 CAN 通信、强制反馈无效（默认不启用）。
+        double inject_feedback_loss_after_s = -1.0;
+        double inject_feedback_loss_duration_s = 3.0;
+        for (int i = 1; i < argc; ++i) {
+            const std::string arg = argv[i];
+            if (arg == "--inject-feedback-loss-after-s" && i + 1 < argc) {
+                inject_feedback_loss_after_s = std::atof(argv[++i]);
+            } else if (arg == "--inject-feedback-loss-duration-s" && i + 1 < argc) {
+                inject_feedback_loss_duration_s = std::atof(argv[++i]);
+            }
+        }
+        if (inject_feedback_loss_after_s > 0.0) {
+            std::cout << "TEST INJECTION: feedback loss after "
+                      << inject_feedback_loss_after_s << " s for "
+                      << inject_feedback_loss_duration_s << " s (CAN remains open)"
+                      << std::endl;
+        }
+        std::signal(SIGINT, signalHandler);
+        std::signal(SIGTERM, signalHandler);
+        rclcpp::init(argc, argv);
+        if (dry_run) {
+            // 无电机验证：不打开 CAN/SBUS/IMU，只运行 ROS 接口与安全校验。
+            std::cout << "DRY_RUN: no CAN/SBUS/motor access; config=" << config_path << std::endl;
+            auto ros_interface = std::make_shared<Ros2Interface>(config, true);
+            ros_interface->start();
+            const std::array<double, 4> zero_rpm{};
+            while (running) {
+                const auto dry_now = std::chrono::steady_clock::now();
+                const auto dry_cmd = ros_interface->motion(dry_now, true, true);
+                ros_interface->publishChassisState(0.0, 0.0, zero_rpm, true, true,
+                                                   false, dry_cmd.estop,
+                                                   "DRY_RUN", dry_cmd.reason);
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            }
+            ros_interface->stop();
+            return 0;
+        }
+
+        std::cout << "RemoteControl_WheelPID_V2 2.1 + ROS 2\n"
+                  << "Software four-wheel PI speed loop using OID current control; original binaries are not modified.\n"
+                  << "SBUS=" << config.sbus_port << " CAN=" << config.can_port << "\n"
+                  << "IDs FL/RL/FR/RR=" << config.motor_ids[0] << "/"
+                  << config.motor_ids[1] << "/" << config.motor_ids[2] << "/"
+                  << config.motor_ids[3] << "\n"
+                  << "Run/rotate wheel RPM=" << config.run_rpm << "/" << config.rotate_rpm << "\n"
+                  << "Pole pairs/gear ratio=" << config.pole_pairs << "/"
+                  << config.gear_ratio << "\n"
+                  << "Accel/decel RPM/s=" << config.speed_accel_rpm_s << "/" << config.speed_decel_rpm_s
+                  << ", reverse_accel=" << config.reverse_speed_accel_rpm_s << "\n"
+                  << "Wheel speed trims FL/RL/FR/RR="
+                  << config.wheel_speed_trim_rpm[0] << "/" << config.wheel_speed_trim_rpm[1] << "/"
+                  << config.wheel_speed_trim_rpm[2] << "/" << config.wheel_speed_trim_rpm[3] << " RPM\n"
+                  << "Rotate in place=" << (config.rotate_in_place_enable ? 1 : 0)
+                  << ", rotate_direction_sign=" << config.rotate_direction_sign
+                  << ", neutral_hold_ms=" << config.rotate_neutral_hold_ms
+                  << ", speed_guard=" << (config.rotate_speed_guard_enable ? 1 : 0)
+                  << ", start_max_rpm=" << config.rotate_start_max_rpm
+                  << ", guard_timeout_ms=" << config.rotate_start_guard_timeout_ms << "\n"
+                  << "Wheel control mode=" << config.wheel_control_mode << "\n"
+                  << "Software wheel PI Kp/Ki=" << config.wheel_speed_kp << "/" << config.wheel_speed_ki << "\n"
+                  << "Wheel run/start-max current=" << config.wheel_max_current * 0.01
+                  << "/" << config.wheel_start_max_current * 0.01 << " A\n"
+                  << "Wheel start kick window=" << config.wheel_start_kick_ms << " ms\n"
+                  << "Active brake=" << (config.brake_enable ? 1 : 0)
+                  << ", current=" << config.brake_current * 0.01
+                  << " A, release_rpm=" << config.brake_release_rpm
+                  << ", stop_window_ms=" << config.stop_brake_window_ms << "\n"
+                  << "Rotate max current(factory torque)="
+                  << config.rotate_max_current * 0.01 << " A\n"
+                  << "Turn inner ratio=" << config.turn_inner_ratio << "\n"
+                  << "Turn max RPM while arc-turning=" << config.turn_max_rpm << "\n"
+                  << "Arc yaw-rate kp/max_boost/min_inner=" << config.arc_turn_yawrate_kp
+                  << "/" << config.arc_turn_yawrate_max_boost_rpm
+                  << "/" << config.arc_turn_min_inner_rpm << "\n"
+                  << "Arc turn current/start-current=" << config.arc_turn_max_current * 0.01
+                  << "/" << config.arc_turn_start_max_current * 0.01
+                  << " A, inner_reverse_hold="
+                  << config.arc_turn_inner_reverse_hold_current * 0.01 << " A\n"
+                  << "Gear select=" << (config.gear_select_enable ? 1 : 0)
+                  << ", channel=" << config.gear_channel
+                  << ", low=" << config.gear_low_run_rpm << "/" << config.gear_low_turn_max_rpm
+                  << ", mid=" << config.gear_mid_run_rpm << "/" << config.gear_mid_turn_max_rpm
+                  << ", high=" << config.gear_high_run_rpm << "/" << config.gear_high_turn_max_rpm << "\n"
+                  << "APP control=" << (config.app_control_enable ? 1 : 0)
+                  << ", udp_port=" << config.app_udp_port
+                  << ", timeout_ms=" << config.app_timeout_ms << "\n"
+                  << "Arc turn blend ms=" << config.arc_turn_blend_ms << "\n"
+                  << "Wheel radius/track width=" << config.wheel_radius_m
+                  << "/" << config.track_width_m << " m" << std::endl;
+
+        CanBus can(config.can_port);
+        SbusReader sbus(config.sbus_port);
+        ImuYaw imu(config);
+        Odometry odom({config.wheel_radius_m, config.track_width_m, config.gear_ratio,
+                       config.imu_heading_enable, 0.85});
+        OdometryCsvLogger odom_logger;
+        if (config.odom_log_enable) {
+            odom_logger.open(config.odom_log_path);
+            std::cout << "Odometry log=" << config.odom_log_path << std::endl;
+        }
+        Controller controller(config, can, config.imu_heading_enable ? &imu : nullptr);
+        AppControlReceiver app_control(config.app_control_enable, config.app_udp_port);
+        auto ros_interface = std::make_shared<Ros2Interface>(config, false);
+        ros_interface->start();
+        controller.stopAll(true);
+        controller.heartbeatAll();
+        notifySystemd("READY=1\nSTATUS=controller ready");
+        SafetyManager safety;
+        safety.initialize();
+        if (config.wheel_control_mode == "speed") {
+            const int32_t accel_erpm_s = static_cast<int32_t>(std::lround(
+                config.speed_accel_rpm_s * config.pole_pairs * config.gear_ratio));
+            const int32_t decel_erpm_s = static_cast<int32_t>(std::lround(
+                config.speed_decel_rpm_s * config.pole_pairs * config.gear_ratio));
+            for (auto id : config.motor_ids) {
+                can.setClosedLoopMaxCurrent(id, config.wheel_max_current);
+                can.setAccel(id, accel_erpm_s);
+                can.setDecel(id, decel_erpm_s);
+                can.speed(id, 0);
+            }
+            std::cout << "Driver speed-loop mode enabled, accel/decel erpm/s="
+                      << accel_erpm_s << "/" << decel_erpm_s << std::endl;
+        }
+        if (config.imu_heading_enable) {
+            std::cout << "IMU calibration: keep robot still for "
+                      << config.imu_calibrate_ms << " ms..." << std::endl;
+            imu.calibrate();
+            std::cout << "IMU heading enabled, bias=" << imu.biasDps()
+                      << " deg/s, yaw_sign=" << config.imu_yaw_sign
+                      << ", Kp=" << config.heading_kp
+                      << ", Ki=" << config.heading_ki
+                      << ", Kd=" << config.heading_kd
+                      << ", max_correction=" << config.heading_max_correction
+                      << ", reverse_max_correction=" << config.reverse_heading_max_correction
+                      << ", correction_sign=" << config.heading_correction_sign
+                      << ", reverse_correction_sign=" << config.heading_reverse_correction_sign
+                      << ", min_correction_error=" << config.heading_min_correction_error_deg
+                      << ", reverse_min_correction_error=" << config.reverse_heading_min_correction_error_deg
+                      << ", min_correction_rpm=" << config.heading_min_correction_rpm
+                      << ", reverse_min_correction_rpm=" << config.reverse_heading_min_correction_rpm
+                      << ", error_boost_kp=" << config.heading_error_boost_kp
+                      << ", reverse_error_boost_kp=" << config.reverse_heading_error_boost_kp
+                      << ", correction_slew=" << config.heading_correction_slew_rpm_per_cycle
+                      << ", reverse_correction_slew=" << config.reverse_heading_correction_slew_rpm_per_cycle
+                      << ", forward_trim=" << config.heading_forward_trim
+                      << ", reverse_trim=" << config.heading_reverse_trim
+                      << ", heading_reset_steering_hold_ms=" << config.heading_reset_steering_hold_ms
+                      << ", lateral_hold=" << (config.lateral_hold_enable ? 1 : 0)
+                      << ", lateral_kp=" << config.lateral_kp_deg_per_m
+                      << ", lateral_max=" << config.lateral_max_heading_deg
+                      << ", lateral_diff_kp=" << config.lateral_diff_kp_rpm_per_m
+                      << ", lateral_diff_max=" << config.lateral_diff_max_rpm
+                      << ", lateral_diff_slew=" << config.lateral_diff_slew_rpm_per_cycle
+                      << std::endl;
+            odom.reset(0.0, 0.0, imu.yawDeg());
+        } else {
+            odom.reset(0.0, 0.0, 0.0);
+        }
+        SbusFrame frame;
+        bool have_frame = false;
+        std::array<int32_t, 4> speed_erpm{};
+        std::array<bool, 4> speed_seen{};
+        std::array<double, 4> latest_measured_rpm{};
+        std::array<uint64_t, 4> speed_generation{};
+        std::array<std::chrono::steady_clock::time_point, 4> speed_update_time{};
+        auto last_frame = std::chrono::steady_clock::now();
+        auto last_control = last_frame - std::chrono::milliseconds(config.control_ms);
+        auto last_heartbeat = last_frame - std::chrono::milliseconds(config.heartbeat_ms);
+        auto last_speed_query = last_frame - std::chrono::milliseconds(config.speed_query_ms);
+        std::size_t speed_query_index = 0;
+        auto last_speed_log = last_frame - std::chrono::milliseconds(config.speed_log_ms);
+        auto last_rc_log = last_frame - std::chrono::milliseconds(250);
+        auto last_odom_update = last_frame;
+        auto last_loop = last_frame;
+        bool loop_overrun_reported = false;
+        const auto program_start = last_frame;
+        bool last_logged_failsafe = false;
+        std::string last_logged_failsafe_reason;
+        bool previous_ros_active = false;
+        bool inject_feedback_loss_logged = false;
+        bool manual_rearm_required = false;
+
+        while (running) {
+            app_control.poll();
+            if (sbus.poll(frame)) {
+                have_frame = true;
+                last_frame = std::chrono::steady_clock::now();
+            }
+
+            uint16_t feedback_id = 0;
+            int32_t feedback_erpm = 0;
+            while (can.readSpeed(feedback_id, feedback_erpm)) {
+                if (feedback_id == 0) continue;
+                for (std::size_t i = 0; i < config.motor_ids.size(); ++i) {
+                    if (config.motor_ids[i] == feedback_id) {
+                        speed_erpm[i] = feedback_erpm;
+                        speed_seen[i] = true;
+                        ++speed_generation[i];
+                        speed_update_time[i] = std::chrono::steady_clock::now();
+                    }
+                }
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            const auto loop_gap_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - last_loop).count();
+            const int loop_gap_limit_ms = std::max(500, config.control_ms * 5);
+            const bool control_cycle_overrun = loop_gap_ms > loop_gap_limit_ms;
+            if (control_cycle_overrun && !loop_overrun_reported) {
+                std::cout << "CONTROL_CYCLE_OVERRUN gap_ms=" << loop_gap_ms
+                          << " limit_ms=" << loop_gap_limit_ms << std::endl;
+                loop_overrun_reported = true;
+            } else if (!control_cycle_overrun) {
+                loop_overrun_reported = false;
+            }
+            last_loop = now;
+            notifySystemd("WATCHDOG=1\nSTATUS=control loop alive");
+            if (now - last_heartbeat >= std::chrono::milliseconds(config.heartbeat_ms)) {
+                controller.heartbeatAll();
+                last_heartbeat = now;
+            }
+
+            if (now - last_speed_query >= std::chrono::milliseconds(config.speed_query_ms)) {
+                can.querySpeed(config.motor_ids[speed_query_index]);
+                speed_query_index = (speed_query_index + 1) % config.motor_ids.size();
+                last_speed_query = now;
+            }
+
+            if (now - last_speed_log >= std::chrono::milliseconds(config.speed_log_ms)) {
+                std::cout << "SPEED_RPM";
+                const char* names[4]{" FL=", " RL=", " FR=", " RR="};
+                for (std::size_t i = 0; i < 4; ++i) {
+                    std::cout << names[i];
+                    if (speed_seen[i]) {
+                        const double rpm = static_cast<double>(speed_erpm[i]) *
+                                           config.motor_dirs[i] /
+                                           (config.pole_pairs * config.gear_ratio);
+                        std::cout << rpm;
+                    } else {
+                        std::cout << "N/A";
+                    }
+                }
+                const auto& targets = controller.wheelTargets();
+                const auto& currents = controller.wheelCurrents();
+                std::cout << " TARGET=" << targets[0] << "/" << targets[1] << "/"
+                          << targets[2] << "/" << targets[3]
+                          << " CURRENT_10mA=" << currents[0] << "/" << currents[1] << "/"
+                          << currents[2] << "/" << currents[3] << std::endl;
+                const auto pose = odom.pose();
+                std::cout << "ODOM x=" << pose.x_m
+                          << " y=" << pose.y_m
+                          << " yaw=" << pose.yaw_deg
+                          << " v=" << odom.linearSpeedMps()
+                          << " w=" << odom.angularSpeedDps()
+                          << std::endl;
+                if (config.odom_log_enable) {
+                    const double time_s = std::chrono::duration<double>(now - program_start).count();
+                    odom_logger.write(time_s, pose, odom, latest_measured_rpm);
+                }
+                last_speed_log = now;
+            }
+
+            if (now - last_control >= std::chrono::milliseconds(config.control_ms)) {
+                if (config.imu_heading_enable) imu.update();
+                std::array<double, 4> measured_rpm{};
+                std::array<bool, 4> feedback_fresh{};
+                for (std::size_t i = 0; i < 4; ++i) {
+                    measured_rpm[i] = static_cast<double>(speed_erpm[i]) *
+                                      config.motor_dirs[i] /
+                                      (config.pole_pairs * config.gear_ratio);
+                    feedback_fresh[i] = speed_seen[i] &&
+                        now - speed_update_time[i] <=
+                            std::chrono::milliseconds(config.speed_feedback_timeout_ms);
+                }
+                latest_measured_rpm = measured_rpm;
+                controller.setWheelFeedback(measured_rpm, feedback_fresh, speed_generation);
+                const double odom_dt = std::chrono::duration<double>(now - last_odom_update).count();
+                odom.update(measured_rpm, odom_dt, config.imu_heading_enable && imu.valid(), imu.yawDeg());
+                last_odom_update = now;
+                const auto current_pose = odom.pose();
+                controller.setOdometryPose(current_pose.x_m, current_pose.y_m, current_pose.yaw_deg);
+                ros_interface->publishOdometry(current_pose, odom.linearSpeedMps(),
+                                                odom.angularSpeedDps(), ros_interface->node()->now());
+                const bool timed_out = !have_frame ||
+                    now - last_frame > std::chrono::milliseconds(config.failsafe_ms);
+                const bool failsafe = timed_out || frame.frame_lost || frame.failsafe;
+                std::string failsafe_reason;
+                if (timed_out) failsafe_reason += "timeout ";
+                if (frame.frame_lost) failsafe_reason += "frame_lost ";
+                if (frame.failsafe) failsafe_reason += "receiver_failsafe ";
+                if (failsafe_reason.empty()) failsafe_reason = "none";
+                if (failsafe && (!last_logged_failsafe || failsafe_reason != last_logged_failsafe_reason)) {
+                    const auto age_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_frame).count();
+                    std::cout << "SBUS_FAILSAFE_REASON " << failsafe_reason
+                              << "have_frame=" << (have_frame ? 1 : 0)
+                              << " last_frame_age_ms=" << age_ms
+                              << " limit_ms=" << config.failsafe_ms
+                              << " frame_lost=" << (frame.frame_lost ? 1 : 0)
+                              << " receiver_failsafe=" << (frame.failsafe ? 1 : 0)
+                              << std::endl;
+                    last_logged_failsafe = true;
+                    last_logged_failsafe_reason = failsafe_reason;
+                } else if (!failsafe) {
+                    last_logged_failsafe = false;
+                    last_logged_failsafe_reason.clear();
+                }
+                const auto throttle_value = frame.channel[config.throttle_channel - 1];
+                const auto steering_value = frame.channel[config.steering_channel - 1];
+                const auto mower_value = frame.channel[config.mower_channel - 1];
+                const auto gear_value = config.gear_select_enable ?
+                    frame.channel[config.gear_channel - 1] : 0;
+                const int rc_throttle = throttleDirection(throttle_value, config);
+                const int rc_steering = steeringDirection(steering_value, config);
+                const double rc_throttle_magnitude = sbusAxisMagnitude(throttle_value, config);
+                const double rc_steering_magnitude = sbusAxisMagnitude(steering_value, config);
+                const bool rc_mower_on = mower_value > config.high_threshold;
+                const bool rc_active = !failsafe && (rc_throttle != 0 || rc_steering != 0 || rc_mower_on);
+                if (now - last_rc_log >= std::chrono::milliseconds(250)) {
+                    std::cout << "RC_INPUT throttle=" << throttle_value
+                              << " steering=" << steering_value
+                              << " mower=" << mower_value
+                              << " gear=" << gear_value
+                              << " decoded=" << rc_throttle << "/" << rc_steering
+                              << " magnitude=" << rc_throttle_magnitude << "/"
+                              << rc_steering_magnitude
+                              << " failsafe=" << (failsafe ? 1 : 0)
+                              << " frame_lost=" << (frame.frame_lost ? 1 : 0)
+                              << " receiver_failsafe=" << (frame.failsafe ? 1 : 0)
+                              << std::endl;
+                    last_rc_log = now;
+                }
+                const auto& app = app_control.command();
+                const bool app_fresh = config.app_control_enable && app.valid &&
+                    now - app.last_update <= std::chrono::milliseconds(config.app_timeout_ms);
+                const bool app_estop = config.app_control_enable && app.valid && app.estop;
+                // APP mode is explicit. Stale APP packets never change mode;
+                // they only cause a safe stop while autonomous.
+                if (app_fresh && app.mode_valid && app.mode == "autonomous" && !ros_interface->autonomousMode()) {
+                    controller.stopAll(true);
+                    ros_interface->setAutonomousMode(true);
+                    manual_rearm_required = false;
+                    std::cout << "APP_MODE autonomous: stopped before accepting ROS 2 cmd_vel" << std::endl;
+                } else if (app_fresh && app.mode_valid && app.mode == "manual" && ros_interface->autonomousMode()) {
+                    controller.stopAll(true);
+                    ros_interface->setAutonomousMode(false);
+                    manual_rearm_required = true;
+                    std::cout << "APP_MODE manual: stopped; waiting for centered RC sticks" << std::endl;
+                }
+                const bool feedback_ok_raw = std::all_of(
+                    feedback_fresh.begin(), feedback_fresh.end(),
+                    [](bool fresh) { return fresh; });
+                const double loop_elapsed_s = std::chrono::duration<double>(
+                    now - program_start).count();
+                const bool inject_feedback_loss_active =
+                    inject_feedback_loss_after_s > 0.0 &&
+                    loop_elapsed_s >= inject_feedback_loss_after_s &&
+                    loop_elapsed_s < inject_feedback_loss_after_s +
+                        inject_feedback_loss_duration_s;
+                if (inject_feedback_loss_active && !inject_feedback_loss_logged) {
+                    inject_feedback_loss_logged = true;
+                    std::cout << "TEST INJECTION ACTIVE: feedback forced invalid" << std::endl;
+                }
+                const bool feedback_ok = feedback_ok_raw && !inject_feedback_loss_active;
+                const bool can_fault = can.receiveFault();
+                const std::string can_fault_reason = can.receiveFaultReason();
+                const auto ros_cmd = ros_interface->motion(now, feedback_ok, !can_fault);
+                const bool ros_active = ros_interface->autonomousMode();
+                if (previous_ros_active && !ros_active) manual_rearm_required = true;
+                previous_ros_active = ros_active;
+                const int ros_throttle = ros_cmd.linear_x > 1e-3 ? -1 :
+                                         (ros_cmd.linear_x < -1e-3 ? 1 : 0);
+                const int ros_steering = ros_cmd.angular_z > 1e-3 ? 1 :
+                                         (ros_cmd.angular_z < -1e-3 ? -1 : 0);
+                const double ros_throttle_magnitude = std::clamp(std::abs(ros_cmd.linear_x) / 0.5, 0.0, 1.0);
+                const double ros_steering_magnitude = std::clamp(std::abs(ros_cmd.angular_z) / 1.0, 0.0, 1.0);
+                const bool ros_drive_requested = ros_cmd.fresh && (ros_throttle != 0 || ros_steering != 0);
+                const bool rc_centered = rc_throttle == 0 && rc_steering == 0 && !rc_mower_on;
+                if (manual_rearm_required && rc_centered) manual_rearm_required = false;
+                const bool manual_allowed = !manual_rearm_required;
+                const bool command_requested = ros_active ? ros_drive_requested :
+                    (manual_allowed && (rc_active || (app_fresh && app.enable)));
+                const bool drive_requested = ros_active ? ros_drive_requested :
+                    (manual_allowed && (rc_throttle != 0 || rc_steering != 0 ||
+                     (app_fresh && app.enable && (app.throttle != 0 || app.steering != 0))));
+                // 安全层输入：ROS 自主模式下 SBUS 缺失属正常；SafeMotionCommand 的
+                // estop 与 APP 急停一起进入安全状态机。
+                safety.update(command_requested, drive_requested,
+                              ros_active ? false : failsafe,
+                              app_estop || ros_cmd.estop,
+                              feedback_ok, controller.wheelSafetyLatched(),
+                              can_fault, can_fault_reason,
+                              control_cycle_overrun);
+
+
+                if (safety.latchedFault()) {
+                    controller.apply(0, 0, false, true);
+                } else if (app_estop) {
+                    controller.setGear(gearProfileFromName(app.gear, config));
+                    controller.apply(0, 0, false, true);
+                } else if (safety.stopRequired()) {
+                    controller.apply(0, 0, false, true);
+                } else if (safety.motionAllowed() && ros_active) {
+                    controller.setGear(gearProfileFromName("MID", config));
+                    // ROS 速度模式（新增）：直接使用 /cmd_vel 的线速度/角速度驱动四轮，
+                    // 速度可连续设置；关闭该开关时退回原来的挡位+幅值方式。
+                    if (config.ros_speed_mode_enable) {
+                        controller.applyRosVelocity(ros_cmd.linear_x, ros_cmd.angular_z,
+                                                    !ros_cmd.fresh);
+                    } else {
+                        controller.apply(ros_throttle, ros_steering, false, !ros_cmd.fresh,
+                                         ros_throttle_magnitude, ros_steering_magnitude);
+                    }
+                } else if (safety.motionAllowed() && manual_allowed && rc_active) {
+                    controller.setGear(gearProfileFromSbus(gear_value, config));
+                    controller.apply(rc_throttle, rc_steering, rc_mower_on, false,
+                                     rc_throttle_magnitude, rc_steering_magnitude);
+                } else if (safety.motionAllowed() && manual_allowed && app_fresh && app.enable) {
+                    controller.setGear(gearProfileFromName(app.gear, config));
+                    controller.apply(app.throttle, app.steering, app.mower_on, false);
+                } else {
+                    controller.setGear(gearProfileFromSbus(gear_value, config));
+                    controller.apply(0, 0, false, false);
+                }
+                {
+                    const std::string safety_state = safetyStateName(safety.state());
+                    std::string fault_reason = ros_interface->faultReason();
+                    if (fault_reason.empty()) fault_reason = safety.reason();
+                    if (!feedback_ok) fault_reason = "CHASSIS_FEEDBACK_LOST";
+                    else if (can_fault) fault_reason = "CAN_FAULT";
+                    // motion_allowed 表示“底盘当前允许接受运动”（能力位），
+                    // 不能要求安全层内部已进入 RUNNING（否则与 safety_supervisor
+                    // 的 chassis.motion_allowed 检查形成死锁）。
+                    const bool chassis_motion_allowed =
+                        ros_active && !ros_cmd.latched && !ros_cmd.estop &&
+                        feedback_ok && !can_fault;
+                    // ChassisState 与 /odom 使用同一 ROS 符号约定：前进 +x、左转 +yaw。
+                    ros_interface->publishChassisState(
+                        -odom.linearSpeedMps(),
+                        -odom.angularSpeedDps() * 3.14159265358979323846 / 180.0,
+                        measured_rpm, feedback_ok, !can_fault,
+                        chassis_motion_allowed,
+                        ros_cmd.estop || app_estop || safety.latchedFault(),
+                        safety_state, fault_reason);
+                }
+                last_control = now;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+
+        controller.stopAll(true);
+        controller.heartbeatAll();
+        ros_interface->stop();
+        std::cout << "Stopped safely." << std::endl;
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "ERROR: " << e.what() << std::endl;
+        return 1;
+    }
+}

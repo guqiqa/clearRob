@@ -1,4 +1,0 @@
-# Include model files for deployment
-!models/*.onnx
-!models/*.pt
-!models/*.yaml

@@ -1,4 +1,0 @@
-# Query current robot pose
----
-geometry_msgs/PoseWithCovariance  pose
-bool                              valid     # true if confidence > threshold

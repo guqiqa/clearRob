@@ -1,0 +1,15 @@
+snapshot=20261116_2024_device_snapshot
+created_at=2026-11-16T00:21:49+08:00
+hostname=ubuntu
+uname=Linux ubuntu 6.1.83-DR-PL5.2_V1.1.0 #53 SMP PREEMPT Wed Sep 30 15:24:46 CST 2026 aarch64 aarch64 aarch64 GNU/Linux
+--- config ---
+d7ff771440aff8fcc74341d0ba9f3000b91894dd2c28aff56a148eec5a34c137  /root/chassis_ros2_nav_v4/src/config.xml
+--- main.cpp ---
+fceb2f2eabbd5612bfdafad8331f989deb1ca021506ccda52b0b83b4265cadf2  /root/chassis_ros2_nav_v4/src/main.cpp
+--- binary ---
+8948f1a883d1c181b88c83539f71a4c16b6df5613506e886ca810a5bb3199aca  /root/chassis_ros2_nav_v4/build/RemoteControl_WheelPID_V2
+--- edu scripts ---
+31b7f6d5f0eef6bfda23c154901f5e4cf9cb33bffe4cb67c63c608ebded8168a  /root/ros2_bridge/edu/edu_heading_pid_lab.py
+fea2fdd9a878936073d8477aa95a86d201cb71460a9063bd0ab2dd4f6b42837f  /root/ros2_bridge/edu/edu_lab_common.py
+211b4ee966332fed4c7ac6957df3d20d7e2c43d265fd8423205204880fdc3822  /root/ros2_bridge/edu/edu_wheel_rpm_lab.py
+f4ef42abb0f8437ab6881747b3315d34eed251e0cd4ae704e600c92f3bf947d9  /root/ros2_bridge/edu/edu_lab_teardown.sh
