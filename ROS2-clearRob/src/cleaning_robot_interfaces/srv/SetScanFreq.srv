@@ -1,0 +1,5 @@
+# Set LiDAR scan frequency
+float32  frequency          # Hz (5~20)
+---
+bool     success
+string   message

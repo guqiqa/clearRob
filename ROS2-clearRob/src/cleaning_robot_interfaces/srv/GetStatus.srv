@@ -1,0 +1,6 @@
+# Generic status query - reused by all modules
+---
+string   node_name           # Node name
+uint8    status              # Module-specific status code
+string   status_text         # Status description
+float32  uptime_s            # Node uptime (s)

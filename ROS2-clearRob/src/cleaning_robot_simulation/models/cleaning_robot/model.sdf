@@ -1,0 +1,208 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="cleaning_robot">
+    <!-- ================================================================= -->
+    <!-- Base chassis                                                       -->
+    <!-- ================================================================= -->
+    <link name="base_link">
+      <inertial>
+        <mass>15.0</mass>
+        <inertia>
+          <ixx>0.8</ixx><ixy>0.0</ixy><ixz>0.0</ixz>
+          <iyy>1.2</iyy><iyz>0.0</iyz>
+          <izz>1.0</izz>
+        </inertia>
+        <pose>0 0 0.15 0 0 0</pose>
+      </inertial>
+      <collision name="base_collision">
+        <geometry><box><size>0.6 0.5 0.3</size></box></geometry>
+        <pose>0 0 0.15 0 0 0</pose>
+      </collision>
+      <visual name="base_visual">
+        <geometry><box><size>0.6 0.5 0.3</size></box></geometry>
+        <pose>0 0 0.15 0 0 0</pose>
+        <material><ambient>0.1 0.1 0.8 1.0</ambient></material>
+      </visual>
+    </link>
+
+    <!-- ================================================================= -->
+    <!-- Wheels                                                             -->
+    <!-- ================================================================= -->
+    <!-- Left wheel -->
+    <link name="wheel_left">
+      <inertial>
+        <mass>0.8</mass>
+        <inertia><ixx>0.002</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.002</iyy><iyz>0</iyz><izz>0.004</izz></inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.1</radius><length>0.06</length></cylinder></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><cylinder><radius>0.1</radius><length>0.06</length></cylinder></geometry>
+        <material><ambient>0.2 0.2 0.2 1.0</ambient></material>
+      </visual>
+    </link>
+
+    <!-- Right wheel -->
+    <link name="wheel_right">
+      <inertial>
+        <mass>0.8</mass>
+        <inertia><ixx>0.002</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.002</iyy><iyz>0</iyz><izz>0.004</izz></inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><cylinder><radius>0.1</radius><length>0.06</length></cylinder></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><cylinder><radius>0.1</radius><length>0.06</length></cylinder></geometry>
+        <material><ambient>0.2 0.2 0.2 1.0</ambient></material>
+      </visual>
+    </link>
+
+    <!-- Left wheel joint (revolute, driven) -->
+    <joint name="wheel_left_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>wheel_left</child>
+      <axis><xyz>0 1 0</xyz></axis>
+      <pose>0 0.28 0.1 0 0 0</pose>
+    </joint>
+
+    <!-- Right wheel joint (revolute, driven) -->
+    <joint name="wheel_right_joint" type="revolute">
+      <parent>base_link</parent>
+      <child>wheel_right</child>
+      <axis><xyz>0 1 0</xyz></axis>
+      <pose>0 -0.28 0.1 0 0 0</pose>
+    </joint>
+
+    <!-- Caster wheel (front, passive) -->
+    <link name="caster_front">
+      <inertial>
+        <mass>0.3</mass>
+        <inertia><ixx>0.001</ixx><ixy>0</ixy><ixz>0</ixz><iyy>0.001</iyy><iyz>0</iyz><izz>0.001</izz></inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><sphere><radius>0.04</radius></sphere></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><sphere><radius>0.04</radius></sphere></geometry>
+        <material><ambient>0.5 0.5 0.5 1.0</ambient></material>
+      </visual>
+    </link>
+
+    <joint name="caster_front_joint" type="ball">
+      <parent>base_link</parent>
+      <child>caster_front</child>
+      <pose>0.25 0 0 0 0 0</pose>
+    </joint>
+
+    <!-- ================================================================= -->
+    <!-- LiDAR sensor                                                       -->
+    <!-- ================================================================= -->
+    <link name="lidar_link">
+      <inertial><mass>0.01</mass><inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz></inertia></inertial>
+      <visual name="visual">
+        <geometry><cylinder><radius>0.06</radius><length>0.04</length></cylinder></geometry>
+        <material><ambient>0.3 0.3 0.3 1.0</ambient></material>
+      </visual>
+      <sensor name="lidar" type="ray">
+        <pose>0 0 0 0 0 0</pose>
+        <ray>
+          <scan>
+            <horizontal>
+              <samples>360</samples>
+              <resolution>1.0</resolution>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+          </scan>
+          <range>
+            <min>0.1</min>
+            <max>30.0</max>
+            <resolution>0.01</resolution>
+          </range>
+        </ray>
+        <plugin name="gazebo_ros_lidar" filename="libgazebo_ros_ray_sensor.so">
+          <ros><namespace>/cleaning_robot</namespace></ros>
+          <topic>lidar/scan/pointcloud</topic>
+          <frame_name>lidar_link</frame_name>
+        </plugin>
+      </sensor>
+    </link>
+
+    <joint name="lidar_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>lidar_link</child>
+      <pose>0.1 0 0.4 0 0 0</pose>
+    </joint>
+
+    <!-- ================================================================= -->
+    <!-- Camera sensor                                                      -->
+    <!-- ================================================================= -->
+    <link name="camera_link">
+      <inertial><mass>0.005</mass><inertia><ixx>1e-5</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-5</iyy><iyz>0</iyz><izz>1e-5</izz></inertia></inertial>
+      <visual name="visual">
+        <geometry><box><size>0.04 0.03 0.02</size></box></geometry>
+        <material><ambient>0.1 0.1 0.1 1.0</ambient></material>
+      </visual>
+      <sensor name="camera" type="camera">
+        <camera>
+          <horizontal_fov>1.047</horizontal_fov>
+          <image><width>1280</width><height>720</height></image>
+          <clip><near>0.1</near><far>100</far></clip>
+        </camera>
+        <plugin name="gazebo_ros_camera" filename="libgazebo_ros_camera.so">
+          <ros><namespace>/cleaning_robot</namespace></ros>
+          <topic>vision/detect/image_raw</topic>
+          <frame_name>camera_link</frame_name>
+        </plugin>
+      </sensor>
+    </link>
+
+    <joint name="camera_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>camera_link</child>
+      <pose>0.2 0 0.5 0 0.2 0</pose>
+    </joint>
+
+    <!-- ================================================================= -->
+    <!-- IMU sensor                                                         -->
+    <!-- ================================================================= -->
+    <link name="imu_link">
+      <inertial><mass>0.001</mass><inertia><ixx>1e-6</ixx><ixy>0</ixy><ixz>0</ixz><iyy>1e-6</iyy><iyz>0</iyz><izz>1e-6</izz></inertia></inertial>
+      <sensor name="imu" type="imu">
+        <plugin name="gazebo_ros_imu" filename="libgazebo_ros_imu_sensor.so">
+          <ros><namespace>/cleaning_robot</namespace></ros>
+          <topic>sensor/imu/data</topic>
+          <frame_name>imu_link</frame_name>
+        </plugin>
+      </sensor>
+    </link>
+
+    <joint name="imu_joint" type="fixed">
+      <parent>base_link</parent>
+      <child>imu_link</child>
+      <pose>0 0 0.1 0 0 0</pose>
+    </joint>
+
+    <!-- ================================================================= -->
+    <!-- Differential drive plugin                                          -->
+    <!-- ================================================================= -->
+    <plugin name="diff_drive" filename="libgazebo_ros_diff_drive.so">
+      <ros><namespace>/cleaning_robot</namespace></ros>
+      <left_joint>wheel_left_joint</left_joint>
+      <right_joint>wheel_right_joint</right_joint>
+      <wheel_separation>0.56</wheel_separation>
+      <wheel_diameter>0.2</wheel_diameter>
+      <max_wheel_torque>20</max_wheel_torque>
+      <max_wheel_acceleration>5</max_wheel_acceleration>
+      <command_topic>motion/cmd_vel</command_topic>
+      <odometry_topic>motion/odom</odometry_topic>
+      <odometry_frame>odom</odometry_frame>
+      <robot_base_frame>base_link</robot_base_frame>
+      <publish_odom>true</publish_odom>
+      <publish_odom_tf>true</publish_odom_tf>
+      <publish_wheel_tf>false</publish_wheel_tf>
+    </plugin>
+
+  </model>
+</sdf>

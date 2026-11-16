@@ -24,6 +24,8 @@ date/
 build/
 install/
 log/
+logs/
+.pids/
 
 # Offline packages (large .deb files)
 phase1_deps/

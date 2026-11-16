@@ -1,0 +1,159 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="outdoor_campus">
+    <!-- Physics -->
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <!-- Global light -->
+    <include>
+      <uri>model://sun</uri>
+    </include>
+
+    <!-- Ground plane -->
+    <include>
+      <uri>model://ground_plane</uri>
+    </include>
+
+    <!-- ---------------------------------------------------------------- -->
+    <!-- Campus environment: buildings, paths, trash bins, benches         -->
+    <!-- ---------------------------------------------------------------- -->
+
+    <!-- Main building -->
+    <model name="main_building">
+      <static>true</static>
+      <pose>8.0 10.0 0.0 0 0 0</pose>
+      <link name="wall">
+        <collision name="wall_collision">
+          <geometry><box><size>12 8 6</size></box></geometry>
+        </collision>
+        <visual name="wall_visual">
+          <geometry><box><size>12 8 6</size></box></geometry>
+          <material><ambient>0.8 0.75 0.7 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Side building -->
+    <model name="side_building">
+      <static>true</static>
+      <pose>-10.0 15.0 0.0 0 0 0.3</pose>
+      <link name="wall">
+        <collision name="wall_collision">
+          <geometry><box><size>8 6 5</size></box></geometry>
+        </collision>
+        <visual name="wall_visual">
+          <geometry><box><size>8 6 5</size></box></geometry>
+          <material><ambient>0.85 0.82 0.78 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Corridor walls (low walls along pathway) -->
+    <model name="corridor_wall_north">
+      <static>true</static>
+      <pose>0.0 5.0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>30 0.3 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>30 0.3 1.0</size></box></geometry>
+          <material><ambient>0.65 0.65 0.65 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="corridor_wall_south">
+      <static>true</static>
+      <pose>0.0 -5.0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>30 0.3 1.0</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>30 0.3 1.0</size></box></geometry>
+          <material><ambient>0.65 0.65 0.65 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Trash bin 1 -->
+    <model name="trash_bin_1">
+      <static>true</static>
+      <pose>3.0 2.5 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.3</radius><length>0.8</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.3</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.2 0.6 0.2 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Trash bin 2 -->
+    <model name="trash_bin_2">
+      <static>true</static>
+      <pose>7.0 -3.0 0.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.3</radius><length>0.8</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.3</radius><length>0.8</length></cylinder></geometry>
+          <material><ambient>0.2 0.3 0.6 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Bench -->
+    <model name="bench_1">
+      <static>true</static>
+      <pose>-5.0 3.0 0.4 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>2.0 0.5 0.8</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>2.0 0.5 0.8</size></box></geometry>
+          <material><ambient>0.55 0.35 0.2 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Loose trash (simulated garbage) -->
+    <model name="loose_trash_1">
+      <static>true</static>
+      <pose>2.0 1.0 0.1 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.15 0.1 0.08</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.15 0.1 0.08</size></box></geometry>
+          <material><ambient>0.9 0.1 0.1 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="loose_trash_2">
+      <static>true</static>
+      <pose>-3.0 -2.0 0.05 0 0 0.5</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.08</radius><length>0.04</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.08</radius><length>0.04</length></cylinder></geometry>
+          <material><ambient>0.1 0.7 0.2 1.0</ambient></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

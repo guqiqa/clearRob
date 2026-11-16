@@ -1,0 +1,51 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="indoor_hall">
+    <physics type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <include><uri>model://sun</uri></include>
+    <include><uri>model://ground_plane</uri></include>
+
+    <!-- Hallway walls -->
+    <model name="wall_north"><static>true</static>
+      <pose>0 4.5 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>20 0.2 3</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>20 0.2 3</size></box></geometry>
+          <material><ambient>0.9 0.9 0.85 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="wall_south"><static>true</static>
+      <pose>0 -4.5 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>20 0.2 3</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>20 0.2 3</size></box></geometry>
+          <material><ambient>0.9 0.9 0.85 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <!-- Columns -->
+    <model name="column_1"><static>true</static>
+      <pose>4 0 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.2</radius><length>3</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.2</radius><length>3</length></cylinder></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient></material></visual>
+      </link>
+    </model>
+
+    <model name="column_2"><static>true</static>
+      <pose>-4 0 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.2</radius><length>3</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.2</radius><length>3</length></cylinder></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient></material></visual>
+      </link>
+    </model>
+  </world>
+</sdf>
